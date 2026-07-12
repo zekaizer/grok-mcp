@@ -46,6 +46,9 @@ Optional: reuse **Grok CLI / Grok Build** credentials via `auth import`
 
 ## Quick start (stdio)
 
+Grab a binary from [GitHub Releases](https://github.com/zekaizer/grok-mcp/releases)
+(Linux is the primary asset; Windows is best-effort), or build from source:
+
 ```sh
 cargo build --release -p grok-server
 # binary: target/release/grok-mcp
