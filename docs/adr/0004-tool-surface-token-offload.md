@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0008](0008-tool-surface-v2-digest-and-evidence.md)
 
 ## Context
 

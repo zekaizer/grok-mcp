@@ -8,6 +8,7 @@ pub mod envelope;
 pub mod http;
 pub mod jobs;
 pub mod logging;
+pub mod modes;
 pub mod oauth;
 pub mod server;
 pub mod tools;

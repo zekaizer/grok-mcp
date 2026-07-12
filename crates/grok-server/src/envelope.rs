@@ -14,6 +14,7 @@ pub enum ErrorCode {
     RateLimited,
     UpstreamError,
     InvalidParams,
+    EvidenceUnavailable,
     OutputTruncated,
     ApiKeyDisabled,
     Timeout,
@@ -29,6 +30,7 @@ impl ErrorCode {
             Self::RateLimited => "RATE_LIMITED",
             Self::UpstreamError => "UPSTREAM_ERROR",
             Self::InvalidParams => "INVALID_PARAMS",
+            Self::EvidenceUnavailable => "EVIDENCE_UNAVAILABLE",
             Self::OutputTruncated => "OUTPUT_TRUNCATED",
             Self::ApiKeyDisabled => "API_KEY_DISABLED",
             Self::Timeout => "TIMEOUT",
@@ -92,6 +94,7 @@ impl Fail {
             | ErrorCode::Timeout
             | ErrorCode::ApiKeyDisabled
             | ErrorCode::OutputTruncated
+            | ErrorCode::EvidenceUnavailable
             | ErrorCode::NotImplemented => ErrorData::internal_error(msg, data),
         }
     }

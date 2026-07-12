@@ -5,8 +5,9 @@ subscription** for research, X search, and heavy analysis — so those jobs burn
 Grok quota instead of Claude tokens.
 
 It calls the xAI **Responses API** with a SuperGrok OAuth session (or an
-opt-in pay-per-token `XAI_API_KEY`). Tool results are **dense digests by
-default**, not raw dumps.
+opt-in pay-per-token `XAI_API_KEY`). Default results are **dense digests**;
+set `result=evidence` for best-effort **full X post text** (hosts often cannot
+fetch x.com).
 
 | | |
 |---|---|
@@ -22,14 +23,14 @@ Schemas: [`docs/tool_spec.md`](docs/tool_spec.md) · ADRs: [`docs/adr/`](docs/ad
 | Tool | Role |
 |---|---|
 | `ask_grok` | Low-cost Q&A / critique / analysis — **no** web/X search |
-| `x_search` | X (Twitter) only via native `x_search` |
+| `x_search` | X (Twitter) search; `result=evidence` for full post text |
 | `research` | Multi-step web/X research (higher SuperGrok quota use) |
 | `job_status` | Poll jobs started with `timeout_secs` |
 | `auth_status` | Non-secret xAI login health |
 
-Shared generative options: `verbosity` (`summary` \| `detailed` \| `raw`),
-`reasoning_effort` (`low` \| `medium` \| `high` where supported),
-`max_output_tokens`, optional **`timeout_secs` (1–300)**.
+Shared options (v2): `depth` (`quick` \| `standard` \| `deep`),
+`result` (`digest` \| `evidence` \| `both`) on live tools,
+`max_output_tokens`, optional **`timeout_secs` (1–300)**, `debug`.
 
 If `timeout_secs` elapses before the call finishes, the tool returns
 `status: "running"` + `job_id` — poll **`job_status`** until `completed` or

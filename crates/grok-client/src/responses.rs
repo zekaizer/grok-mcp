@@ -272,14 +272,21 @@ pub fn truncate_chars(s: &str, max_chars: usize) -> (String, bool) {
     (format!("{truncated}…"), true)
 }
 
-/// Verbosity → soft character budget for host-facing text (tool_spec).
+/// Soft character budget for host-facing text (legacy name kept for callers).
+/// Prefer tool_spec v2 budgets in `grok_server::modes`.
 #[must_use]
 pub fn verbosity_char_budget(verbosity: &str) -> usize {
     match verbosity {
-        "raw" => 32 * 1024,
-        "detailed" => 16 * 1024,
-        _ => 4 * 1024, // summary default
+        "raw" | "evidence" | "both" | "deep" => 48 * 1024,
+        "detailed" | "standard" => 8 * 1024,
+        _ => 4 * 1024,
     }
+}
+
+/// Debug payload cap when `debug=true`.
+#[must_use]
+pub fn debug_payload_budget() -> usize {
+    32 * 1024
 }
 
 /// Try to parse a JSON object from model text (strip fences if present).
