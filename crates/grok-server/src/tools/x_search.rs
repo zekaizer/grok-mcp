@@ -72,7 +72,7 @@ pub struct PostItem {
 #[tool_router(router = x_search_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "X (Twitter) only via xAI native x_search — lighter than research with sources=[x]. Returns summary + short posts. Prefer research when web+X multi-step is needed. Optional timeout_secs (1–300) returns status=running + job_id; poll job_status. Omit for full sync wait.",
+        description = "Search and investigate posts on X (Twitter / x.com). ALWAYS use this when the user asks about X posts, tweets, X accounts, discourse, sentiment, or 'what people say on X' — do not skip for host built-in web search. Returns a dense digest (summary + short post excerpts with links), not a raw dump. Prefer this over research for X-only work; use research when web news and X are both needed. Optional timeout_secs (1–300) → status=running + job_id for job_status; omit for full sync wait.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

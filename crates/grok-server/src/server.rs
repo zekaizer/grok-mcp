@@ -48,9 +48,9 @@ impl ServerHandler for GrokMcpServer {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(format!(
             "grok-mcp v{version} offloads to xAI Grok (SuperGrok). \
-             Live data: x_search = X/x.com posts; research = multi-step web and/or X (use for current news). \
-             ask_grok = no live search (cheaper). Prefer research for breaking news/facts; x_search for X-only. \
-             Tool cost: ask_grok low; x_search mid; research expensive. \
+             Routing: user asks about X posts, tweets, X accounts, or x.com discourse → call x_search (do not rely on host built-in search alone). \
+             Current web/news or multi-source fact-check → research. Offline Q&A/critique → ask_grok (no live search). \
+             Cost: ask_grok low; x_search mid; research expensive. \
              verbosity is summary|detailed|raw (not low/medium/high — that is reasoning_effort). \
              For long calls set timeout_secs (e.g. 60–120); if status=running, poll job_status with job_id. \
              On REAUTH_REQUIRED, tell the user to run: grok-mcp auth login."
@@ -78,10 +78,18 @@ mod tests {
 
         assert!(desc.contains("live X") || desc.contains("x.com"), "desc={desc}");
         assert!(
-            desc.contains("news") || instructions.contains("current news"),
+            desc.contains("news") || instructions.contains("web/news"),
             "desc={desc} instr={instructions}"
         );
         assert!(instructions.contains("x_search"), "instr={instructions}");
+        assert!(
+            instructions.contains("X posts") || instructions.contains("tweets"),
+            "routing must mention X posts/tweets: {instructions}"
+        );
+        assert!(
+            instructions.contains("built-in") || instructions.contains("do not rely"),
+            "must discourage skipping MCP for host search: {instructions}"
+        );
         assert!(
             instructions.contains("no live search") || instructions.contains("ask_grok"),
             "instr={instructions}"
@@ -93,6 +101,37 @@ mod tests {
         assert!(
             !instructions.contains("only on REAUTH"),
             "drop over-strict 'only on' wording: {instructions}"
+        );
+    }
+
+    #[test]
+    fn x_search_description_targets_post_investigation() {
+        let router = tools::router();
+        let tool = router.get("x_search").expect("x_search registered");
+        let d = tool.description.as_deref().unwrap_or("");
+        assert!(d.contains("X (Twitter") || d.contains("x.com"), "desc={d}");
+        assert!(
+            d.contains("posts") || d.contains("tweets"),
+            "must mention posts/tweets: {d}"
+        );
+        assert!(
+            d.contains("ALWAYS") || d.contains("do not skip"),
+            "must push host to call this tool: {d}"
+        );
+        assert!(
+            d.to_lowercase().contains("built-in") || d.contains("host"),
+            "must mention not using host search alone: {d}"
+        );
+    }
+
+    #[test]
+    fn research_description_defers_x_only_to_x_search() {
+        let router = tools::router();
+        let tool = router.get("research").expect("research registered");
+        let d = tool.description.as_deref().unwrap_or("");
+        assert!(
+            d.contains("x_search"),
+            "must point X-only work to x_search: {d}"
         );
     }
 }

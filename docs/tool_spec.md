@@ -432,9 +432,10 @@ Credential resolution order is defined in [ADR-0003](adr/0003-xai-authentication
 Each tool's MCP `description` should tell the host model:
 
 1. Prefer these tools when the task would burn **many Claude turns** (research, X monitoring, long critique).
-2. Trust the digest within stated `confidence`; do not re-run the same search with host-native tools unless verification is required.
-3. Keep `verbosity=summary` unless the user asked for depth.
-4. On `REAUTH_REQUIRED`, tell the user to run `grok-mcp auth login` — do not invent credentials.
+2. **X posts / tweets / x.com** → call `x_search` (do not skip for host built-in web search alone).
+3. Trust the digest within stated `confidence`; do not re-run the same search with host-native tools unless verification is required.
+4. Keep `verbosity=summary` unless the user asked for depth.
+5. On `REAUTH_REQUIRED`, tell the user to run `grok-mcp auth login` — do not invent credentials.
 
 ---
 

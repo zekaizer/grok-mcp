@@ -87,7 +87,7 @@ Rules: prefer citations with real URLs; keep answer short; no raw page dumps; so
 #[tool_router(router = research_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Multi-step research via xAI Grok with optional web/X tools. Expensive (high SuperGrok quota). Returns a dense digest (verbosity: summary|detailed|raw). Prefer ask_grok for no-search Q&A; prefer x_search for X-only. Optional timeout_secs (1–300): if the call is still running after N seconds, returns status=running + job_id — then poll job_status. Omit timeout_secs for full synchronous wait.",
+        description = "Multi-step live research (current web/news and optional X) via xAI Grok. Use for breaking news, fact-checking, or topics that need web sources. Expensive (high SuperGrok quota). For X posts / tweets / x.com-only investigation use x_search instead. For no live sources use ask_grok. Returns a dense digest (verbosity: summary|detailed|raw). Optional timeout_secs (1–300): still running after N seconds → status=running + job_id, then poll job_status. Omit for full sync wait.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
