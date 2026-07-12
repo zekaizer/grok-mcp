@@ -203,7 +203,13 @@ Run a research task on xAI. The server instructs Grok to use native tools when
 
 - `sources` entries are **citations only** (title + url + kind). No full page bodies.
 - `raw` is present only when `verbosity=raw` (upstream text / tool traces, size-capped).
-- `usage` is best-effort from the Responses API; omit fields if upstream does not provide them (still include the object with nulls or partials).
+- `usage` is best-effort from the Responses API and includes, when present:
+  `input_tokens`, `output_tokens`, `reasoning_tokens`, `total_tokens`,
+  `cached_tokens`, `num_server_side_tools_used`, `num_sources_used`,
+  `server_side_tool_usage` (billable category counts), and
+  `output_tool_call_counts` (counts of `output[].type` such as `web_search_call`).
+  The server also emits a structured log line (`target=grok_client::usage`) with the
+  same metrics (no prompt/response body).
 
 ### Semantics
 

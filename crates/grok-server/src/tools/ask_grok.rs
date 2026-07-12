@@ -14,6 +14,7 @@ use crate::GrokMcpServer;
 use crate::envelope::{ErrorCode, Fail};
 use crate::jobs::{JobKind, RunOutcome, next_poll_hint, run_with_timeout};
 use crate::upstream::client_error_to_fail;
+use crate::usage_out::{UsageOut, usage_out_and_log};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -55,14 +56,6 @@ pub struct AskGrokOk {
     pub usage: Option<UsageOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-pub struct UsageOut {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
 }
 
 #[tool_router(router = ask_grok_router, vis = "pub(crate)")]
@@ -188,7 +181,8 @@ impl GrokMcpServer {
         let text = extract_output_text(&body);
         let budget = verbosity_char_budget(&verbosity);
         let (text, truncated) = truncate_chars(&text, budget);
-        let usage = body.usage.as_ref();
+        let model_out = body.model.clone().unwrap_or(model);
+        let usage = usage_out_and_log("ask_grok", &model_out, &body);
 
         Ok(AskGrokOk {
             ok: true,
@@ -197,12 +191,8 @@ impl GrokMcpServer {
             next: None,
             elapsed_secs: None,
             text: Some(text),
-            model: Some(body.model.unwrap_or(model)),
-            usage: Some(UsageOut {
-                input_tokens: usage.and_then(|u| u.input_tokens).unwrap_or(0),
-                output_tokens: usage.and_then(|u| u.output_tokens).unwrap_or(0),
-                reasoning_tokens: usage.and_then(|u| u.reasoning_tokens()).unwrap_or(0),
-            }),
+            model: Some(model_out),
+            usage: Some(usage),
             truncated: Some(truncated),
         })
     }
