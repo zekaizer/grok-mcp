@@ -3,6 +3,8 @@
 mod ask_grok;
 mod auth_status;
 mod job_status;
+#[cfg(test)]
+mod live_e2e;
 mod research;
 mod x_search;
 
