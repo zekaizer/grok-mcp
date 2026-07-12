@@ -52,7 +52,7 @@ pub struct AccountHints {
 #[tool_router(router = auth_status_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Report whether grok-mcp can call xAI (subscription OAuth or opt-in API key). Never returns secrets. Access tokens refresh automatically near expiry; call this on REAUTH_REQUIRED or after login/import. expires_at alone does not mean the session dies — refresh uses the stored refresh_token.",
+        description = "Report whether grok-mcp can call xAI (subscription OAuth or opt-in API key). Never returns secrets. Access tokens refresh automatically near expiry; on invalid_grant the server re-imports from Grok CLI (~/.grok/auth.json) when possible. Only if both stores are dead: run grok-mcp auth login (or auth import). expires_at alone does not mean the session dies.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
