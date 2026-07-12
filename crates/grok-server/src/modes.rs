@@ -96,6 +96,41 @@ pub fn depth_char_budget(effort: &str) -> usize {
     }
 }
 
+/// Evidence completeness for success responses (`empty` | `partial` | `complete`).
+///
+/// Empty matches and partial text are **success**, not `EVIDENCE_UNAVAILABLE`.
+#[must_use]
+pub fn evidence_status_for_posts(posts: &[(bool, bool)]) -> &'static str {
+    // (has_text, text_complete)
+    if posts.is_empty() {
+        return "empty";
+    }
+    if posts.iter().all(|(has, complete)| *has && *complete) {
+        return "complete";
+    }
+    "partial"
+}
+
+/// Same for research citations with optional quotes.
+#[must_use]
+pub fn evidence_status_for_quotes(quotes: &[Option<&str>], quote_complete: &[bool]) -> &'static str {
+    debug_assert_eq!(quotes.len(), quote_complete.len());
+    let pairs: Vec<(bool, bool)> = quotes
+        .iter()
+        .zip(quote_complete.iter())
+        .map(|(q, c)| {
+            let has = q.map(|s| !s.trim().is_empty()).unwrap_or(false);
+            (has, has && *c)
+        })
+        .filter(|(has, _)| *has)
+        .collect();
+    if pairs.is_empty() {
+        "empty"
+    } else {
+        evidence_status_for_posts(&pairs)
+    }
+}
+
 #[must_use]
 pub fn cost_hint_for(tool: &str, effort: &str, mode: Option<ResultMode>) -> &'static str {
     if tool == "ask_grok" {
@@ -141,5 +176,23 @@ mod tests {
         assert!(ResultMode::Both.wants_digest());
         assert!(ResultMode::Both.wants_evidence());
         assert!(!ResultMode::Digest.wants_evidence());
+    }
+
+    #[test]
+    fn evidence_status_empty_partial_complete() {
+        assert_eq!(evidence_status_for_posts(&[]), "empty");
+        assert_eq!(
+            evidence_status_for_posts(&[(true, true), (true, true)]),
+            "complete"
+        );
+        assert_eq!(
+            evidence_status_for_posts(&[(true, true), (true, false)]),
+            "partial"
+        );
+        assert_eq!(evidence_status_for_quotes(&[], &[]), "empty");
+        assert_eq!(
+            evidence_status_for_quotes(&[Some("hi"), None], &[true, false]),
+            "complete"
+        );
     }
 }

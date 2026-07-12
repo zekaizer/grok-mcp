@@ -34,7 +34,7 @@ Architecture rationale: [`docs/adr/0008-tool-surface-v2-digest-and-evidence.md`]
 
 1. **Correct information path** — exact-quote / full-post work must not depend on host x.com fetch.
 2. **Host token offload** — digest defaults stay dense.
-3. **Clear failure codes** — including `EVIDENCE_UNAVAILABLE`.
+3. **Clear failure codes** — auth/rate/upstream; empty evidence is **success** with `evidence_status`.
 4. **Minimal surface** — five tools; no public raw Responses proxy.
 5. **No silent paid fallback** — API key path only with explicit opt-in.
 
@@ -67,7 +67,6 @@ Success: `{ "ok": true, "...": "tool-specific fields" }`.
 | `RATE_LIMITED` | xAI 429 | Yes after `retry_after_ms` if present |
 | `UPSTREAM_ERROR` | 5xx / malformed upstream | Maybe |
 | `INVALID_PARAMS` | Semantic rejection | No |
-| `EVIDENCE_UNAVAILABLE` | `result=evidence` but no usable full texts | Maybe (narrow query) |
 | `OUTPUT_TRUNCATED` | Cap hit (may also set `truncated: true` on success) | — |
 | `API_KEY_DISABLED` | API key needed but opt-in off | No |
 | `TIMEOUT` | Deadline | Maybe |
@@ -180,6 +179,7 @@ In-memory jobs; max 2 concurrent; ~30m TTL after finish.
     "guarantee": "best_effort_from_xai_tools",
     "notes": "Not a bit-perfect X API export; host x.com fetch not required."
   },
+  "evidence_status": "complete",
   "model": "…",
   "usage": {},
   "cost_hint": "mid",
@@ -189,9 +189,12 @@ In-memory jobs; max 2 concurrent; ~30m TTL after finish.
 ```
 
 - `result=digest`: `digest` required; `posts[].text` may be short; `text_complete` often false.
-- `result=evidence`: full text preferred; if **no** usable posts → error `EVIDENCE_UNAVAILABLE`.
+- `result=evidence`: full text preferred; **zero matches stay `ok: true`** with `posts: []`,
+  `evidence_status: "empty"`, and a short digest (not an error).
+- `evidence_status` (when evidence requested): `empty` \| `partial` \| `complete`.
 - `result=both`: both digest and posts with full text preferred.
 - `fidelity` present when evidence was requested.
+- Tool description must warn: **not bit-perfect / not for legal-audit verbatim**.
 
 ### Semantics
 
@@ -253,7 +256,8 @@ In-memory jobs; max 2 concurrent; ~30m TTL after finish.
 ```
 
 - X-**only** post investigation → prefer **`x_search`** (tool description must say so).
-- `result=evidence|both`: fill `quote` on citations; empty quotes when evidence requested → `EVIDENCE_UNAVAILABLE` if no citations with quotes.
+- `result=evidence|both`: fill `quote` on citations; empty quotes → `ok: true` with
+  `evidence_status: "empty"` (digest/answer still returned when possible).
 
 ---
 

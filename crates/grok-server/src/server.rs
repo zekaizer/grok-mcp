@@ -95,9 +95,12 @@ mod tests {
         let tool = router.get("x_search").expect("x_search registered");
         let d = tool.description.as_deref().unwrap_or("");
         assert!(d.contains("evidence"), "desc={d}");
-        assert!(d.contains("FULL") || d.contains("full"), "desc={d}");
         assert!(
-            d.contains("x.com") || d.contains("X posts"),
+            d.contains("NOT a bit-perfect") || d.contains("best-effort"),
+            "fidelity warning must be in description: {d}"
+        );
+        assert!(
+            d.contains("x.com") || d.contains("X posts") || d.contains("X (Twitter"),
             "desc={d}"
         );
     }

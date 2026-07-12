@@ -14,7 +14,8 @@ use crate::GrokMcpServer;
 use crate::envelope::{ErrorCode, Fail};
 use crate::jobs::{JobKind, RunOutcome, next_poll_hint, run_with_timeout};
 use crate::modes::{
-    ResultMode, cost_hint_for, parse_depth_effort, parse_result_mode, result_char_budget,
+    ResultMode, cost_hint_for, evidence_status_for_quotes, parse_depth_effort, parse_result_mode,
+    result_char_budget,
 };
 use crate::upstream::client_error_to_fail;
 use crate::usage_out::{UsageOut, usage_out_and_log};
@@ -60,6 +61,9 @@ pub struct ResearchOk {
     pub key_points: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub citations: Option<Vec<CitationItem>>,
+    /// When evidence was requested: `empty` | `partial` | `complete`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -142,6 +146,7 @@ impl GrokMcpServer {
                 answer: None,
                 key_points: None,
                 citations: None,
+                evidence_status: None,
                 confidence: None,
                 model: None,
                 usage: None,
@@ -225,21 +230,16 @@ impl GrokMcpServer {
             a
         };
 
-        if mode.wants_evidence() {
-            let has_quote = citations.iter().any(|c| {
-                c.quote
-                    .as_ref()
-                    .map(|q| !q.trim().is_empty())
-                    .unwrap_or(false)
-            });
-            if !has_quote {
-                return Err(Fail::new(
-                    ErrorCode::EvidenceUnavailable,
-                    "no citation quotes available for result=evidence",
-                    true,
-                ));
-            }
-        }
+        let evidence_status = if mode.wants_evidence() {
+            let quotes: Vec<Option<&str>> = citations
+                .iter()
+                .map(|c| c.quote.as_deref())
+                .collect();
+            let completes: Vec<bool> = citations.iter().map(|c| c.quote_complete).collect();
+            Some(evidence_status_for_quotes(&quotes, &completes).to_string())
+        } else {
+            None
+        };
 
         let debug_payload = if debug {
             let (d, t) = truncate_chars(&text, debug_payload_budget());
@@ -253,6 +253,14 @@ impl GrokMcpServer {
         let usage = usage_out_and_log("research", &model_out, &body);
         let cost = cost_hint_for("research", effort, Some(mode));
 
+        let answer_out = if answer.is_empty() && evidence_status.as_deref() == Some("empty") {
+            Some("No evidence quotes available for this query.".into())
+        } else if mode.wants_digest() || !answer.is_empty() {
+            Some(answer)
+        } else {
+            None
+        };
+
         Ok(ResearchOk {
             ok: true,
             status: "completed".into(),
@@ -260,13 +268,10 @@ impl GrokMcpServer {
             next: None,
             elapsed_secs: None,
             result_mode: Some(mode.as_str().into()),
-            answer: if mode.wants_digest() || !answer.is_empty() {
-                Some(answer)
-            } else {
-                None
-            },
+            answer: answer_out,
             key_points: Some(key_points),
             citations: Some(citations),
+            evidence_status,
             confidence: Some(confidence),
             model: Some(model_out),
             usage: Some(usage),

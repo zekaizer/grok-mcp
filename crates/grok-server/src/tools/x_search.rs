@@ -14,8 +14,8 @@ use crate::GrokMcpServer;
 use crate::envelope::{ErrorCode, Fail};
 use crate::jobs::{JobKind, RunOutcome, next_poll_hint, run_with_timeout};
 use crate::modes::{
-    ResultMode, cost_hint_for, parse_depth_effort, parse_result_mode, post_text_cap,
-    result_char_budget,
+    ResultMode, cost_hint_for, evidence_status_for_posts, parse_depth_effort, parse_result_mode,
+    post_text_cap, result_char_budget,
 };
 use crate::upstream::client_error_to_fail;
 use crate::usage_out::{UsageOut, usage_out_and_log};
@@ -62,6 +62,9 @@ pub struct XSearchOk {
     pub posts: Option<Vec<PostItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<FidelityBlock>,
+    /// When evidence was requested: `empty` | `partial` | `complete` (always success path).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,7 +112,7 @@ pub struct PostItem {
 #[tool_router(router = x_search_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Search and investigate posts on X (Twitter / x.com). ALWAYS use for X posts, tweets, accounts, discourse, or sentiment — do not skip for host built-in web search; hosts usually cannot fetch x.com. result=digest (default) = summary + short excerpts; result=evidence = best-effort FULL post text for exact quotes (no host x.com fetch required); result=both = digest + full posts. depth=quick|standard|deep controls exploration cost. Prefer over research for X-only work. Optional timeout_secs (1–300) → job_status polling.",
+        description = "Search X (Twitter / x.com) posts. NOT a bit-perfect X API export: post text is best-effort via Grok (may paraphrase); do not use for legal/audit verbatim. ALWAYS use for X posts/tweets/discourse — hosts usually cannot fetch x.com. result=digest (default)=summary+excerpts; result=evidence=best-effort full post text (empty matches return ok with evidence_status=empty, not an error); result=both=digest+posts. depth=quick|standard|deep. Prefer over research for X-only. Optional timeout_secs → job_status.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -162,6 +165,7 @@ impl GrokMcpServer {
                 digest: None,
                 posts: None,
                 fidelity: None,
+                evidence_status: None,
                 model: None,
                 usage: None,
                 cost_hint: None,
@@ -245,22 +249,7 @@ impl GrokMcpServer {
             truncated |= t;
         }
 
-        if summary.is_empty() && !posts.is_empty() && mode.wants_digest() {
-            summary = format!("{} posts matched.", posts.len());
-        }
-
-        if mode.wants_evidence() {
-            let usable = posts.iter().any(|p| !p.text.trim().is_empty());
-            if !usable {
-                return Err(Fail::new(
-                    ErrorCode::EvidenceUnavailable,
-                    "no full post texts available for result=evidence; try a narrower query or depth=deep",
-                    true,
-                ));
-            }
-        }
-
-        // Enforce aggregate budget on post texts for evidence.
+        // Enforce aggregate budget on post texts for evidence (never fail the call).
         if mode.wants_evidence() {
             let mut used = 0usize;
             for p in &mut posts {
@@ -281,12 +270,26 @@ impl GrokMcpServer {
                 used += p.text.chars().count();
             }
             posts.retain(|p| !p.text.is_empty());
+        }
+
+        let evidence_status = if mode.wants_evidence() {
+            let pairs: Vec<(bool, bool)> = posts
+                .iter()
+                .map(|p| (!p.text.trim().is_empty(), p.text_complete))
+                .collect();
+            Some(evidence_status_for_posts(&pairs).to_string())
+        } else {
+            None
+        };
+
+        if summary.is_empty() {
             if posts.is_empty() {
-                return Err(Fail::new(
-                    ErrorCode::EvidenceUnavailable,
-                    "evidence exceeded size cap with no remaining posts",
-                    true,
-                ));
+                summary = "No matching posts found.".into();
+                if confidence == "medium" {
+                    confidence = "high".into();
+                }
+            } else if mode.wants_digest() || mode.wants_evidence() {
+                summary = format!("{} posts matched.", posts.len());
             }
         }
 
@@ -302,7 +305,9 @@ impl GrokMcpServer {
         let usage = usage_out_and_log("x_search", &model_out, &body);
         let cost = cost_hint_for("x_search", effort, Some(mode));
 
-        let digest = if mode.wants_digest() {
+        // Always return a digest when empty so "no posts" is visible even for result=evidence.
+        let want_digest = mode.wants_digest() || posts.is_empty();
+        let digest = if want_digest {
             Some(DigestBlock {
                 summary,
                 key_points: if key_points.is_empty() {
@@ -336,6 +341,7 @@ impl GrokMcpServer {
             digest,
             posts: Some(posts),
             fidelity,
+            evidence_status,
             model: Some(model_out),
             usage: Some(usage),
             cost_hint: Some(cost.into()),
@@ -427,5 +433,22 @@ mod tests {
     fn digest_instructions_allow_short() {
         let s = x_search_instructions(ResultMode::Digest, 5);
         assert!(s.contains("short") || s.contains("excerpts"));
+    }
+
+    #[test]
+    fn tool_description_leads_with_fidelity_warning() {
+        let router = crate::tools::router();
+        let d = router
+            .get("x_search")
+            .expect("x_search")
+            .description
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            d.starts_with("Search X") || d.contains("NOT a bit-perfect"),
+            "desc={d}"
+        );
+        assert!(d.contains("NOT a bit-perfect") || d.contains("best-effort"), "desc={d}");
+        assert!(d.contains("evidence_status=empty") || d.contains("empty"), "desc={d}");
     }
 }
