@@ -1,0 +1,37 @@
+# grok-mcp systemd unit (ADR-0007).
+# Prefer: sudo ./deploy/grokctl install  (rewrites User/paths for the installing user)
+#
+# Manual:
+#   sudo cp deploy/grok-mcp.service /etc/systemd/system/
+#   # edit User=, Group=, ReadWritePaths=
+#   sudo systemctl daemon-reload && sudo systemctl enable --now grok-mcp
+
+[Unit]
+Description=grok-mcp xAI Responses MCP server (SuperGrok bridge)
+Documentation=https://github.com/zekaizer/grok-mcp
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=YOUR_USER
+Group=YOUR_USER
+EnvironmentFile=/etc/grok-mcp/env
+# --http is redundant when GROK_MCP_TRANSPORT=http is in the env file;
+# keep the flag so a mis-set TRANSPORT still serves HTTP in production.
+ExecStart=/usr/local/bin/grok-mcp --http
+Restart=on-failure
+RestartSec=2
+
+# Hardening: state dir + xAI auth store must be writable; home otherwise RO.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/YOUR_USER/.local/state/grok-mcp
+ReadWritePaths=/home/YOUR_USER/.config/grok-mcp
+# Optional: allow import from Grok CLI credentials without a prior copy.
+# ReadWritePaths=/home/YOUR_USER/.grok
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+[package]
+name = "grok-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "grok-mcp MCP server binary (stdio + Streamable HTTP)"
+
+[[bin]]
+name = "grok-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+grok-auth.workspace = true
+grok-client.workspace = true
+rmcp = { workspace = true }
+serde = { workspace = true }
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+axum.workspace = true
+http-body.workspace = true
+getrandom.workspace = true
+sha2.workspace = true
+base64.workspace = true
+url.workspace = true
+blake3.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

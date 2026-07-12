@@ -1,0 +1,353 @@
+#!/bin/bash
+# grokctl — manage the grok-mcp production service (ADR-0007).
+#
+#   grokctl install          binary + unit + /etc/grok-mcp/env + enable --now
+#   grokctl install-tunnel   DNS route + apply cloudflared config + reload
+#   grokctl bootstrap        install + install-tunnel (one sudo session)
+#   grokctl update|rollback|start|stop|restart|status|logs|edit|token|auth-status
+#
+# Host-specific values (public host, tunnel id, local bind) come from, in order:
+#   1) environment variables
+#   2) $REPO/.local/deploy.env  (not in git; see .local/README.md)
+#   3) placeholders (mcp.example.com / empty tunnel id)
+set -euo pipefail
+
+UNIT=grok-mcp
+BIN=/usr/local/bin/grok-mcp
+ENV_FILE=/etc/grok-mcp/env
+CF_CONFIG=/etc/cloudflared/config.yml
+REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+
+# Optional host-local overrides (never committed).
+if [ -f "$REPO/.local/deploy.env" ]; then
+    # shellcheck disable=SC1091
+    set -a
+    # shellcheck disable=SC1090
+    . "$REPO/.local/deploy.env"
+    set +a
+fi
+
+CF_TUNNEL_ID="${GROK_MCP_CF_TUNNEL_ID:-}"
+PUBLIC_HOST="${GROK_MCP_PUBLIC_HOST:-mcp.example.com}"
+LOCAL_ADDR="${GROK_MCP_HTTP_ADDR:-127.0.0.1:8765}"
+CF_INGRESS_SRC="${GROK_MCP_CF_CONFIG:-$REPO/.local/cloudflared-config.yml}"
+
+# Non-root helpers (no sudo).
+case "${1:-}" in
+    token|auth-status|"") ;;
+    *)
+        if [ "${EUID}" -ne 0 ]; then
+            exec sudo --preserve-env=EDITOR,SUDO_USER,HOME,GROK_MCP_CF_TUNNEL_ID,GROK_MCP_PUBLIC_HOST,GROK_MCP_HTTP_ADDR,GROK_MCP_CF_CONFIG "$0" "$@"
+        fi
+        ;;
+esac
+
+die() { echo "grokctl: $*" >&2; exit 1; }
+
+envval() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1 | sed "s/^['\"]//;s/['\"]$//"; }
+
+service_user() {
+    local u
+    u=$(sed -n 's/^User=//p' "/etc/systemd/system/${UNIT}.service" 2>/dev/null | head -1)
+    echo "${u:-${SUDO_USER:-$USER}}"
+}
+
+health() {
+    local addr host code token
+    addr=$(envval GROK_MCP_HTTP_ADDR); addr=${addr:-$LOCAL_ADDR}
+    host=$(envval GROK_MCP_HTTP_ALLOWED_HOSTS | cut -d, -f1)
+    host=${host:-$PUBLIC_HOST}
+    token=$(envval GROK_MCP_HTTP_TOKEN)
+
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://$addr/mcp" \
+        -H "Host: $host" || true)
+
+    if [ -n "$token" ] && [ "$token" != "REPLACE_ME" ]; then
+        if [ "$code" = 401 ]; then
+            echo "health: OK (guarded /mcp answers 401 without a bearer)"
+        else
+            echo "health: FAIL — expected 401 from http://$addr/mcp Host=$host, got '${code}'"
+            return 1
+        fi
+    else
+        case "$code" in
+            000|"")
+                echo "health: FAIL — cannot connect to http://$addr/mcp"
+                return 1
+                ;;
+            5*)
+                echo "health: FAIL — server error ${code}"
+                return 1
+                ;;
+            *)
+                echo "health: OK (http://$addr/mcp → ${code}; set GROK_MCP_HTTP_TOKEN for auth check)"
+                ;;
+        esac
+    fi
+}
+
+public_health() {
+    local code
+    if [ "$PUBLIC_HOST" = "mcp.example.com" ]; then
+        echo "public: SKIP (set GROK_MCP_PUBLIC_HOST or .local/deploy.env)"
+        return 0
+    fi
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+        -X POST "https://${PUBLIC_HOST}/mcp" || true)
+    if [ "$code" = 401 ]; then
+        echo "public: OK https://${PUBLIC_HOST}/mcp → 401 (front-door up)"
+    else
+        echo "public: FAIL https://${PUBLIC_HOST}/mcp → '${code}' (expect 401)"
+        return 1
+    fi
+}
+
+build_and_install() {
+    echo "building release binary in $REPO ..."
+    local user home cargo
+    user="${SUDO_USER:-$USER}"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    cargo="$home/.cargo/bin/cargo"
+    [ -x "$cargo" ] || cargo="$(sudo -u "$user" -i sh -c 'command -v cargo' 2>/dev/null || true)"
+    [ -n "${cargo:-}" ] && [ -x "$cargo" ] \
+        || die "cargo not found for user $user (looked under $home/.cargo/bin)"
+    sudo -u "$user" env "HOME=$home" "$cargo" \
+        build --release -p grok-server --manifest-path "$REPO/Cargo.toml" --quiet
+    if [ -x "$BIN" ]; then
+        cp -f "$BIN" "$BIN.prev"
+        echo "kept previous binary at $BIN.prev"
+    fi
+    install -m 0755 "$REPO/target/release/grok-mcp" "$BIN"
+    echo "installed $BIN"
+}
+
+seed_env() {
+    local user home token src
+    user="${SUDO_USER:-$USER}"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    mkdir -p /etc/grok-mcp
+
+    if [ -f "$ENV_FILE" ]; then
+        echo "keeping existing $ENV_FILE"
+    else
+        # Prefer private local env, then sample + random token.
+        if [ -f "$REPO/.local/env" ]; then
+            src="$REPO/.local/env"
+            echo "seeding $ENV_FILE from .local/env"
+        elif [ -f "$REPO/deploy/local.env" ]; then
+            src="$REPO/deploy/local.env"
+            echo "seeding $ENV_FILE from deploy/local.env"
+        else
+            src="$REPO/deploy/grok-mcp.env.example"
+            echo "seeding $ENV_FILE from sample + new token"
+        fi
+        install -m 0600 "$src" "$ENV_FILE"
+        chown "$user:" "$ENV_FILE"
+
+        if grep -q '^GROK_MCP_HTTP_TOKEN=REPLACE_ME' "$ENV_FILE" 2>/dev/null; then
+            token="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')"
+            sed -i "s|^GROK_MCP_HTTP_TOKEN=REPLACE_ME|GROK_MCP_HTTP_TOKEN=${token}|" "$ENV_FILE"
+            echo "generated GROK_MCP_HTTP_TOKEN (see $ENV_FILE)"
+        fi
+    fi
+
+    # Align bind/host from host-local deploy.env when set (do not invent secrets).
+    if [ -n "${GROK_MCP_PUBLIC_HOST:-}" ] && [ "$PUBLIC_HOST" != "mcp.example.com" ]; then
+        if grep -q '^GROK_MCP_HTTP_ALLOWED_HOSTS=' "$ENV_FILE"; then
+            sed -i "s|^GROK_MCP_HTTP_ALLOWED_HOSTS=.*|GROK_MCP_HTTP_ALLOWED_HOSTS=${PUBLIC_HOST}|" "$ENV_FILE"
+        else
+            echo "GROK_MCP_HTTP_ALLOWED_HOSTS=${PUBLIC_HOST}" >>"$ENV_FILE"
+        fi
+    fi
+    if [ -n "${GROK_MCP_HTTP_ADDR:-}" ]; then
+        if grep -q '^GROK_MCP_HTTP_ADDR=' "$ENV_FILE"; then
+            sed -i "s|^GROK_MCP_HTTP_ADDR=.*|GROK_MCP_HTTP_ADDR=${LOCAL_ADDR}|" "$ENV_FILE"
+        else
+            echo "GROK_MCP_HTTP_ADDR=${LOCAL_ADDR}" >>"$ENV_FILE"
+        fi
+    fi
+    if grep -q '^GROK_MCP_TRANSPORT=' "$ENV_FILE"; then
+        sed -i 's|^GROK_MCP_TRANSPORT=.*|GROK_MCP_TRANSPORT=http|' "$ENV_FILE"
+    else
+        echo "GROK_MCP_TRANSPORT=http" >>"$ENV_FILE"
+    fi
+    if ! grep -q '^GROK_MCP_STATE_DIR=' "$ENV_FILE"; then
+        echo "GROK_MCP_STATE_DIR=${home}/.local/state/grok-mcp" >>"$ENV_FILE"
+    fi
+
+    install -d -o "$user" -g "$user" -m 0700 \
+        "$home/.config/grok-mcp" \
+        "$home/.local/state/grok-mcp"
+}
+
+install_unit() {
+    local user home
+    user="${SUDO_USER:-$USER}"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    install -m 0644 "$REPO/deploy/grok-mcp.service" "/etc/systemd/system/${UNIT}.service"
+    sed -i \
+        -e "s|^User=.*|User=${user}|" \
+        -e "s|^Group=.*|Group=${user}|" \
+        -e "s|YOUR_USER|${user}|g" \
+        -e "s|^ReadWritePaths=.*\.local/state/grok-mcp|ReadWritePaths=${home}/.local/state/grok-mcp|" \
+        -e "s|^ReadWritePaths=.*\.config/grok-mcp|ReadWritePaths=${home}/.config/grok-mcp|" \
+        "/etc/systemd/system/${UNIT}.service"
+    systemctl daemon-reload
+    echo "installed /etc/systemd/system/${UNIT}.service (User=${user})"
+}
+
+ensure_xai_auth() {
+    local user home
+    user="${SUDO_USER:-$USER}"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    if [ ! -f "$home/.config/grok-mcp/auth.json" ]; then
+        if [ -f "$home/.grok/auth.json" ]; then
+            echo "importing SuperGrok credentials for $user ..."
+            sudo -u "$user" env "HOME=$home" "$BIN" auth import || true
+        else
+            echo "WARNING: no SuperGrok store for $user — run as $user:"
+            echo "  $BIN auth import    # or: $BIN auth login"
+        fi
+    else
+        echo "SuperGrok store present for $user"
+        sudo -u "$user" env "HOME=$home" "$BIN" auth status || true
+    fi
+}
+
+do_install() {
+    build_and_install
+    seed_env
+    install_unit
+    ensure_xai_auth
+    systemctl enable --now "$UNIT"
+    sleep 1
+    systemctl is-active --quiet "$UNIT" || die "unit failed to start; journalctl -u $UNIT -n 50"
+    health
+    echo
+    echo "=== front-door token (Claude Code / claude.ai consent) ==="
+    envval GROK_MCP_HTTP_TOKEN
+    echo
+    echo "local MCP:  http://${LOCAL_ADDR}/mcp  (Host: ${PUBLIC_HOST})"
+    echo "public MCP: https://${PUBLIC_HOST}/mcp  (after install-tunnel)"
+}
+
+do_install_tunnel() {
+    [ -n "$CF_TUNNEL_ID" ] || die "set GROK_MCP_CF_TUNNEL_ID or put it in .local/deploy.env"
+    [ -f "$CF_INGRESS_SRC" ] || die "missing cloudflared config at $CF_INGRESS_SRC (copy deploy/cloudflared-config.example.yml → .local/cloudflared-config.yml)"
+
+    echo "routing DNS ${PUBLIC_HOST} → tunnel ${CF_TUNNEL_ID} ..."
+    local user home
+    user="${SUDO_USER:-$USER}"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    if ! sudo -u "$user" env "HOME=$home" cloudflared tunnel route dns "$CF_TUNNEL_ID" "$PUBLIC_HOST" 2>&1; then
+        echo "WARNING: DNS route command failed or already exists — check Cloudflare dashboard if public health fails"
+    fi
+
+    if [ -f "$CF_CONFIG" ]; then
+        cp -a "$CF_CONFIG" "${CF_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
+        echo "backed up $CF_CONFIG"
+    fi
+    install -m 0644 "$CF_INGRESS_SRC" "$CF_CONFIG"
+    echo "wrote $CF_CONFIG from $CF_INGRESS_SRC"
+
+    systemctl restart cloudflared
+    sleep 2
+    systemctl is-active --quiet cloudflared || die "cloudflared not active"
+    echo "cloudflared restarted"
+
+    local i
+    for i in 1 2 3 4 5 6; do
+        if public_health 2>/dev/null; then
+            return 0
+        fi
+        sleep 3
+    done
+    public_health || true
+    echo "if public still fails: wait for DNS, check Access is OFF for ${PUBLIC_HOST}"
+}
+
+restart_and_check() {
+    systemctl restart "$UNIT"
+    sleep 1
+    systemctl is-active --quiet "$UNIT" || die "unit is not active; see: journalctl -u $UNIT -n 50"
+    health
+}
+
+case "${1:-}" in
+install)
+    do_install
+    ;;
+install-tunnel)
+    do_install_tunnel
+    ;;
+bootstrap)
+    do_install
+    echo
+    do_install_tunnel
+    echo
+    echo "=== done ==="
+    echo "Claude Code:"
+    echo "  claude mcp add --transport http grok-xai https://${PUBLIC_HOST}/mcp \\"
+    echo "    --header \"Authorization: Bearer \$(sudo sed -n 's/^GROK_MCP_HTTP_TOKEN=//p' $ENV_FILE)\""
+    echo "claude.ai connector URL: https://${PUBLIC_HOST}/mcp"
+    echo "  (paste the same token on the OAuth consent page)"
+    ;;
+update)
+    build_and_install
+    install_unit
+    restart_and_check
+    ;;
+rollback)
+    [ -x "$BIN.prev" ] || die "no $BIN.prev to roll back to"
+    cp -f "$BIN" "$BIN.rolledback"
+    cp -f "$BIN.prev" "$BIN"
+    echo "rolled back binary (previous at $BIN.rolledback)"
+    restart_and_check
+    ;;
+start)   systemctl start "$UNIT" && sleep 1 && health ;;
+stop)    systemctl stop "$UNIT" && echo stopped ;;
+restart) restart_and_check ;;
+status)
+    systemctl --no-pager --lines 0 status "$UNIT" || true
+    echo
+    health || true
+    public_health || true
+    if [ -x "$BIN" ]; then
+        echo "xAI credentials:"
+        local_user="$(service_user)"
+        sudo -u "$local_user" "$BIN" auth status 2>/dev/null \
+            || echo "  (could not run auth status)"
+    fi
+    echo "token (for clients):"
+    envval GROK_MCP_HTTP_TOKEN 2>/dev/null || echo "  (no env)"
+    echo "recent warnings:"
+    journalctl -u "$UNIT" --since -1h -p warning --no-pager -o cat | tail -5 \
+        || echo "  (none)"
+    ;;
+logs)
+    shift
+    exec journalctl -u "$UNIT" -f "$@"
+    ;;
+edit)
+    "${EDITOR:-vi}" "$ENV_FILE"
+    read -r -p "restart $UNIT to apply? [y/N] " a
+    [ "${a,,}" = y ] && restart_and_check || echo "not restarted"
+    ;;
+token)
+    head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '='
+    echo
+    ;;
+auth-status)
+    if [ -x "$BIN" ]; then
+        exec "$BIN" auth status
+    elif [ -x "$REPO/target/release/grok-mcp" ]; then
+        exec "$REPO/target/release/grok-mcp" auth status
+    else
+        die "binary not found; build first"
+    fi
+    ;;
+*)
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+    ;;
+esac

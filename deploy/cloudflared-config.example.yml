@@ -1,0 +1,21 @@
+# Example cloudflared ingress for grok-mcp.
+#
+# 1. Copy to .local/cloudflared-config.yml (gitignored via .git/info/exclude)
+# 2. Fill tunnel id, credentials path, public hostname
+# 3. Merge into your live config and reload cloudflared
+#
+#   cloudflared tunnel route dns <TUNNEL_ID> <PUBLIC_HOST>
+#   sudo cp .local/cloudflared-config.yml /etc/cloudflared/config.yml
+#   sudo systemctl restart cloudflared
+#
+# Do NOT put Cloudflare Access on the MCP hostname — it breaks the
+# claude.ai OAuth connector (ADR-0006).
+
+tunnel: <TUNNEL_UUID>
+credentials-file: /home/<USER>/.cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  # ...your other hostnames...
+  - hostname: <PUBLIC_HOST>
+    service: http://127.0.0.1:8765
+  - service: http_status:404

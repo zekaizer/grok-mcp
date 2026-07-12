@@ -1,0 +1,19 @@
+[package]
+name = "grok-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "xAI Responses API client and dense output post-processing"
+
+[lints]
+workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
