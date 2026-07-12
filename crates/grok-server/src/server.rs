@@ -41,17 +41,58 @@ impl ServerHandler for GrokMcpServer {
         info.server_info.version = version.into();
         info.server_info.title = Some(format!("grok-mcp v{version}"));
         info.server_info.description = Some(format!(
-            "grok-mcp v{version} — SuperGrok / xAI Responses MCP bridge \
-             (research, x_search, ask_grok, job_status, auth_status)"
+            "grok-mcp v{version} — SuperGrok / xAI Responses MCP: live X (x.com) search, \
+             current web/news research, and cheap offline ask_grok \
+             (tools: research, x_search, ask_grok, job_status, auth_status)"
         ));
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(format!(
-            "grok-mcp v{version} offloads work to xAI Grok (SuperGrok subscription). \
-             Tool choice: ask_grok = no search, low quota; x_search = X only; research = web/X multi-step (expensive). \
+            "grok-mcp v{version} offloads to xAI Grok (SuperGrok). \
+             Live data: x_search = X/x.com posts; research = multi-step web and/or X (use for current news). \
+             ask_grok = no live search (cheaper). Prefer research for breaking news/facts; x_search for X-only. \
+             Tool cost: ask_grok low; x_search mid; research expensive. \
              verbosity is summary|detailed|raw (not low/medium/high — that is reasoning_effort). \
              For long calls set timeout_secs (e.g. 60–120); if status=running, poll job_status with job_id. \
-             Access tokens refresh automatically; only on REAUTH_REQUIRED run: grok-mcp auth login (or auth import)."
+             On REAUTH_REQUIRED, tell the user to run: grok-mcp auth login."
         ));
         info
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grok_client::ClientConfig;
+    use rmcp::ServerHandler;
+
+    fn test_server() -> GrokMcpServer {
+        let client = GrokClient::new(ClientConfig::default()).expect("client");
+        GrokMcpServer::new(None, client)
+    }
+
+    #[test]
+    fn get_info_emphasizes_live_x_and_news() {
+        let info = test_server().get_info();
+        let desc = info.server_info.description.as_deref().unwrap_or("");
+        let instructions = info.instructions.as_deref().unwrap_or("");
+
+        assert!(desc.contains("live X") || desc.contains("x.com"), "desc={desc}");
+        assert!(
+            desc.contains("news") || instructions.contains("current news"),
+            "desc={desc} instr={instructions}"
+        );
+        assert!(instructions.contains("x_search"), "instr={instructions}");
+        assert!(
+            instructions.contains("no live search") || instructions.contains("ask_grok"),
+            "instr={instructions}"
+        );
+        assert!(
+            instructions.contains("REAUTH_REQUIRED") && instructions.contains("auth login"),
+            "instr={instructions}"
+        );
+        assert!(
+            !instructions.contains("only on REAUTH"),
+            "drop over-strict 'only on' wording: {instructions}"
+        );
     }
 }
