@@ -14,6 +14,7 @@ use crate::GrokMcpServer;
 use crate::envelope::{ErrorCode, Fail};
 use crate::jobs::{JobKind, RunOutcome, next_poll_hint, run_with_timeout};
 use crate::upstream::client_error_to_fail;
+use crate::usage_out::{UsageOut, usage_out_and_log};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -66,13 +67,6 @@ pub struct PostItem {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engagement_hint: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-pub struct UsageOut {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
 }
 
 #[tool_router(router = x_search_router, vis = "pub(crate)")]
@@ -223,7 +217,8 @@ impl GrokMcpServer {
             summary_trunc = summary_trunc || rt;
         }
 
-        let usage = body.usage.as_ref();
+        let model_out = body.model.clone().unwrap_or(model);
+        let usage = usage_out_and_log("x_search", &model_out, &body);
         Ok(XSearchOk {
             ok: true,
             status: "completed".into(),
@@ -232,11 +227,8 @@ impl GrokMcpServer {
             elapsed_secs: None,
             summary: Some(summary),
             posts: Some(posts),
-            model: Some(body.model.unwrap_or(model)),
-            usage: Some(UsageOut {
-                input_tokens: usage.and_then(|u| u.input_tokens).unwrap_or(0),
-                output_tokens: usage.and_then(|u| u.output_tokens).unwrap_or(0),
-            }),
+            model: Some(model_out),
+            usage: Some(usage),
             truncated: Some(summary_trunc),
             raw: raw_out,
         })

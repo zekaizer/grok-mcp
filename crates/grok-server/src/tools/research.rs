@@ -14,6 +14,7 @@ use crate::GrokMcpServer;
 use crate::envelope::{ErrorCode, Fail};
 use crate::jobs::{JobKind, RunOutcome, next_poll_hint, run_with_timeout};
 use crate::upstream::client_error_to_fail;
+use crate::usage_out::{UsageOut, usage_out_and_log};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -72,14 +73,6 @@ pub struct SourceItem {
     pub title: String,
     pub url: String,
     pub kind: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-pub struct UsageOut {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
 }
 
 const RESEARCH_INSTRUCTIONS: &str = r#"You are a research agent. Use available tools when needed, then answer with ONLY a JSON object (no markdown fences):
@@ -242,7 +235,8 @@ impl GrokMcpServer {
             answer_trunc = answer_trunc || rt;
         }
 
-        let usage = body.usage.as_ref();
+        let model_out = body.model.clone().unwrap_or(model);
+        let usage = usage_out_and_log("research", &model_out, &body);
         Ok(ResearchOk {
             ok: true,
             status: "completed".into(),
@@ -253,12 +247,8 @@ impl GrokMcpServer {
             key_points: Some(key_points),
             sources: Some(sources),
             confidence: Some(confidence),
-            model: Some(body.model.unwrap_or(model)),
-            usage: Some(UsageOut {
-                input_tokens: usage.and_then(|u| u.input_tokens).unwrap_or(0),
-                output_tokens: usage.and_then(|u| u.output_tokens).unwrap_or(0),
-                reasoning_tokens: usage.and_then(|u| u.reasoning_tokens()).unwrap_or(0),
-            }),
+            model: Some(model_out),
+            usage: Some(usage),
             truncated: Some(answer_trunc),
             raw: raw_out,
         })

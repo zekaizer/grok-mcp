@@ -12,6 +12,7 @@ pub mod oauth;
 pub mod server;
 pub mod tools;
 pub mod upstream;
+pub mod usage_out;
 
 pub use config::{Cli, Command, Config, HttpConfig, LogFormat, Transport};
 pub use server::GrokMcpServer;

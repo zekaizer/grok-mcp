@@ -7,8 +7,9 @@ mod responses;
 pub use config::{ClientConfig, DEFAULT_BASE_URL, DEFAULT_MODEL};
 pub use error::ClientError;
 pub use responses::{
-    CreateResponseRequest, ReasoningParam, ResponseBody, Usage, extract_output_text,
-    parse_json_object, truncate_chars, verbosity_char_budget,
+    CreateResponseRequest, ReasoningParam, ResponseBody, Usage, UsageReport,
+    count_output_tool_calls, extract_output_text, log_usage, parse_json_object, truncate_chars,
+    usage_report, verbosity_char_budget,
 };
 
 use reqwest::Client;
