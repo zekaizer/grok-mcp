@@ -34,7 +34,8 @@ Shared options (v2): `depth` (`quick` \| `standard` \| `deep`),
 
 If `timeout_secs` elapses before the call finishes, the tool returns
 `status: "running"` + `job_id` — poll **`job_status`** until `completed` or
-`failed`. Jobs are in-memory (lost on restart); max 2 concurrent.
+`failed`. Jobs are in-memory (lost on restart); max 10 concurrent
+(over the cap returns retryable `RATE_LIMITED`).
 
 ## Requirements
 
