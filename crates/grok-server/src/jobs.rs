@@ -9,11 +9,16 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tokio::sync::Semaphore;
 
 use crate::envelope::{ErrorCode, Fail};
 
-/// Max concurrent background jobs (SuperGrok quota protection).
+/// Max concurrent background jobs actually calling xAI (SuperGrok quota protection).
 pub const MAX_INFLIGHT: usize = 10;
+
+/// Max jobs allowed to wait for an inflight slot. Beyond `MAX_INFLIGHT + MAX_QUEUED`
+/// admission is refused with a retryable `RATE_LIMITED` (bounds quota and memory).
+pub const MAX_QUEUED: usize = 20;
 
 /// Keep finished jobs this long for polling.
 pub const JOB_TTL: Duration = Duration::from_secs(30 * 60);
@@ -44,9 +49,14 @@ impl JobKind {
 
 #[derive(Debug, Clone)]
 pub enum JobState {
+    /// Admitted, waiting for an inflight slot (in the queue).
+    Queued,
     Running,
     Completed(Value),
-    Failed { code: String, message: String },
+    Failed {
+        code: String,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -58,9 +68,20 @@ struct JobEntry {
 }
 
 /// Shared job registry (cheap to clone).
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct JobStore {
     inner: Arc<Mutex<HashMap<String, JobEntry>>>,
+    /// Permits = `MAX_INFLIGHT`; a job holds one for the duration of its xAI call.
+    sem: Arc<Semaphore>,
+}
+
+impl Default for JobStore {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            sem: Arc::new(Semaphore::new(MAX_INFLIGHT)),
+        }
+    }
 }
 
 impl JobStore {
@@ -77,20 +98,26 @@ impl JobStore {
         });
     }
 
-    fn inflight_locked(map: &HashMap<String, JobEntry>) -> usize {
+    /// Jobs occupying the system: queued (waiting) or running (holding a permit).
+    fn active_locked(map: &HashMap<String, JobEntry>) -> usize {
         map.values()
-            .filter(|e| matches!(e.state, JobState::Running))
+            .filter(|e| matches!(e.state, JobState::Queued | JobState::Running))
             .count()
     }
 
-    /// Allocate a running job slot. Errors if at inflight cap.
-    pub fn start(&self, kind: JobKind) -> Result<String, Fail> {
+    /// Admit a job into the queue. Returns a `job_id` immediately (state `Queued`);
+    /// the caller must then acquire a permit via [`Self::semaphore`] before running.
+    /// Errors with retryable `RATE_LIMITED` only when the queue itself is full.
+    pub fn admit(&self, kind: JobKind) -> Result<String, Fail> {
         let mut map = self.inner.lock().expect("job store lock");
         Self::purge_locked(&mut map);
-        if Self::inflight_locked(&map) >= MAX_INFLIGHT {
+        if Self::active_locked(&map) >= MAX_INFLIGHT + MAX_QUEUED {
             return Err(Fail::new(
                 ErrorCode::RateLimited,
-                format!("too many inflight jobs (max {MAX_INFLIGHT}); poll job_status or retry"),
+                format!(
+                    "too many jobs (max {MAX_INFLIGHT} running + {MAX_QUEUED} queued); \
+                     poll job_status or retry"
+                ),
                 true,
             ));
         }
@@ -101,10 +128,26 @@ impl JobStore {
                 kind,
                 created: Instant::now(),
                 finished: None,
-                state: JobState::Running,
+                state: JobState::Queued,
             },
         );
         Ok(id)
+    }
+
+    /// Transition a queued job to running once it holds a permit.
+    pub fn mark_running(&self, id: &str) {
+        let mut map = self.inner.lock().expect("job store lock");
+        if let Some(e) = map.get_mut(id)
+            && matches!(e.state, JobState::Queued)
+        {
+            e.state = JobState::Running;
+        }
+    }
+
+    /// Concurrency limiter shared across all jobs (permits = `MAX_INFLIGHT`).
+    #[must_use]
+    fn semaphore(&self) -> Arc<Semaphore> {
+        self.sem.clone()
     }
 
     pub fn complete_json(&self, id: &str, value: Value) {
@@ -134,6 +177,7 @@ impl JobStore {
             job_id: id.to_string(),
             kind: e.kind,
             status: match &e.state {
+                JobState::Queued => "queued",
                 JobState::Running => "running",
                 JobState::Completed(_) => "completed",
                 JobState::Failed { .. } => "failed",
@@ -207,10 +251,20 @@ where
             Ok(RunOutcome::Completed(result))
         }
         Some(secs) => {
-            let job_id = store.start(kind)?;
+            let job_id = store.admit(kind)?;
             let store_bg = store.clone();
             let jid = job_id.clone();
+            let sem = store.semaphore();
             let handle = tokio::spawn(async move {
+                // Wait for an inflight slot — this await is the queue.
+                let _permit = match sem.acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        store_bg.fail(&jid, "UPSTREAM_ERROR", "job scheduler shut down");
+                        return;
+                    }
+                };
+                store_bg.mark_running(&jid);
                 match work().await {
                     Ok(val) => match serde_json::to_value(&val) {
                         Ok(json) => store_bg.complete_json(&jid, json),
@@ -218,6 +272,7 @@ where
                     },
                     Err(fail) => store_bg.fail(&jid, fail.error.code.as_str(), fail.error.message),
                 }
+                // Permit dropped here — the next queued job proceeds.
             });
 
             let sleep = tokio::time::sleep(Duration::from_secs(u64::from(secs)));
@@ -351,16 +406,70 @@ mod tests {
     }
 
     #[test]
-    fn inflight_cap_enforced() {
+    fn admit_queues_until_capacity_then_rate_limited() {
         let store = JobStore::new();
-        // Fill every slot.
-        for _ in 0..MAX_INFLIGHT {
-            store.start(JobKind::XSearch).expect("slot within cap");
+        // Running slots + queue slots are all admissible.
+        for _ in 0..(MAX_INFLIGHT + MAX_QUEUED) {
+            store
+                .admit(JobKind::XSearch)
+                .expect("within queue capacity");
         }
-        // One past the cap is rejected as retryable RATE_LIMITED.
-        let err = store.start(JobKind::XSearch).expect_err("over cap");
+        // One past the queue is rejected as retryable RATE_LIMITED.
+        let err = store
+            .admit(JobKind::XSearch)
+            .expect_err("over queue capacity");
         assert_eq!(err.error.code, ErrorCode::RateLimited);
         assert!(err.error.retryable);
+    }
+
+    #[tokio::test]
+    async fn over_inflight_is_queued_then_drains() {
+        let store = JobStore::new();
+        // Hold every inflight permit with jobs that block on a gate.
+        let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+        let mut blockers = Vec::new();
+        for _ in 0..MAX_INFLIGHT {
+            let store = store.clone();
+            let g = gate.clone();
+            blockers.push(tokio::spawn(async move {
+                run_with_timeout(&store, JobKind::XSearch, Some(1), move || async move {
+                    g.notified().await;
+                    Ok::<_, Fail>(Dummy { n: 0 })
+                })
+                .await
+                .unwrap()
+            }));
+        }
+        for b in blockers {
+            assert!(matches!(b.await.unwrap(), RunOutcome::Running { .. }));
+        }
+
+        // One more job: admitted, but no permit — it must sit in the queue and
+        // still return immediately (offloaded) rather than block.
+        let out = run_with_timeout(&store, JobKind::XSearch, Some(1), || async {
+            Ok::<_, Fail>(Dummy { n: 99 })
+        })
+        .await
+        .unwrap();
+        let job_id = match out {
+            RunOutcome::Running { job_id, .. } => job_id,
+            RunOutcome::Completed(_) => panic!("expected queued/running"),
+        };
+        assert_eq!(store.get(&job_id).unwrap().status, "queued");
+
+        // Release the blockers; the queued job acquires a freed slot and completes.
+        gate.notify_waiters();
+        let mut done = false;
+        for _ in 0..100 {
+            if store.get(&job_id).unwrap().status == "completed" {
+                done = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(done, "queued job never drained");
+        let d: Dummy = serde_json::from_value(store.get(&job_id).unwrap().result.unwrap()).unwrap();
+        assert_eq!(d.n, 99);
     }
 
     #[test]
