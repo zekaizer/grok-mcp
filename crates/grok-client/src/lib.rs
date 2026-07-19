@@ -8,8 +8,8 @@ pub use config::{ClientConfig, DEFAULT_BASE_URL, DEFAULT_MODEL};
 pub use error::ClientError;
 pub use responses::{
     CreateResponseRequest, ReasoningParam, ResponseBody, Usage, UsageReport,
-    count_output_tool_calls, extract_output_text, log_usage, parse_json_object, truncate_chars,
-    debug_payload_budget, usage_report, verbosity_char_budget,
+    count_output_tool_calls, debug_payload_budget, extract_output_text, log_usage,
+    parse_json_object, truncate_chars, usage_report, verbosity_char_budget,
 };
 
 use reqwest::Client;

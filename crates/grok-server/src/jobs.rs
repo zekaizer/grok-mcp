@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::envelope::{ErrorCode, Fail};
 
 /// Max concurrent background jobs (SuperGrok quota protection).
-pub const MAX_INFLIGHT: usize = 2;
+pub const MAX_INFLIGHT: usize = 10;
 
 /// Keep finished jobs this long for polling.
 pub const JOB_TTL: Duration = Duration::from_secs(30 * 60);
@@ -348,6 +348,19 @@ mod tests {
             RunOutcome::Completed(d) => assert_eq!(d.n, 7),
             RunOutcome::Running { .. } => panic!("expected completed"),
         }
+    }
+
+    #[test]
+    fn inflight_cap_enforced() {
+        let store = JobStore::new();
+        // Fill every slot.
+        for _ in 0..MAX_INFLIGHT {
+            store.start(JobKind::XSearch).expect("slot within cap");
+        }
+        // One past the cap is rejected as retryable RATE_LIMITED.
+        let err = store.start(JobKind::XSearch).expect_err("over cap");
+        assert_eq!(err.error.code, ErrorCode::RateLimited);
+        assert!(err.error.retryable);
     }
 
     #[test]

@@ -125,7 +125,7 @@ Shared by generative tools where noted.
 ### Async (`timeout_secs`)
 
 Same as v1: omit = wait; set N → may return `status=running` + `job_id`; poll `job_status`.
-In-memory jobs; max 2 concurrent; ~30m TTL after finish.
+In-memory jobs; max 10 concurrent (over the cap → retryable `RATE_LIMITED`); ~30m TTL after finish.
 
 ---
 

@@ -37,6 +37,7 @@ pub struct XSearchArgs {
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
     /// If set (1–300), wait at most N seconds then return status=running + job_id for job_status.
+    /// Async jobs are capped at 10 concurrent; over the cap returns retryable RATE_LIMITED.
     #[serde(default)]
     pub timeout_secs: Option<u32>,
     #[serde(default)]
@@ -112,7 +113,7 @@ pub struct PostItem {
 #[tool_router(router = x_search_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Search X (Twitter / x.com) posts. NOT a bit-perfect X API export: post text is best-effort via Grok (may paraphrase); do not use for legal/audit verbatim. ALWAYS use for X posts/tweets/discourse — hosts usually cannot fetch x.com. result=digest (default)=summary+excerpts; result=evidence=best-effort full post text (empty matches return ok with evidence_status=empty, not an error); result=both=digest+posts. depth=quick|standard|deep. Prefer over research for X-only. Optional timeout_secs → job_status.",
+        description = "Search X (Twitter / x.com) posts. NOT a bit-perfect X API export: post text is best-effort via Grok (may paraphrase); do not use for legal/audit verbatim. ALWAYS use for X posts/tweets/discourse — hosts usually cannot fetch x.com. result=digest (default)=summary+excerpts; result=evidence=best-effort full post text (empty matches return ok with evidence_status=empty, not an error); result=both=digest+posts. depth=quick|standard|deep. Prefer over research for X-only. Optional timeout_secs → job_status (async jobs capped at 10 concurrent; over the cap returns retryable RATE_LIMITED).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -448,7 +449,13 @@ mod tests {
             d.starts_with("Search X") || d.contains("NOT a bit-perfect"),
             "desc={d}"
         );
-        assert!(d.contains("NOT a bit-perfect") || d.contains("best-effort"), "desc={d}");
-        assert!(d.contains("evidence_status=empty") || d.contains("empty"), "desc={d}");
+        assert!(
+            d.contains("NOT a bit-perfect") || d.contains("best-effort"),
+            "desc={d}"
+        );
+        assert!(
+            d.contains("evidence_status=empty") || d.contains("empty"),
+            "desc={d}"
+        );
     }
 }

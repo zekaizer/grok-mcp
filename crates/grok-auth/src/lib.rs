@@ -72,10 +72,7 @@ pub fn should_adopt_cli(cli: &AuthRecord, store: Option<&AuthRecord>) -> bool {
         _ => {
             // Different refresh token with equal/unknown expiry: adopt if store RT missing.
             store.refresh_token.as_ref().is_none_or(|r| r.is_empty())
-                && cli
-                    .refresh_token
-                    .as_ref()
-                    .is_some_and(|r| !r.is_empty())
+                && cli.refresh_token.as_ref().is_some_and(|r| !r.is_empty())
         }
     }
 }
@@ -173,8 +170,7 @@ async fn recover_after_revoked(
     {
         // CLI holds the same dead RT — human login required.
         return Err(AuthError::RefreshRejected(
-            "refresh token revoked (Grok CLI has the same token); run: grok-mcp auth login"
-                .into(),
+            "refresh token revoked (Grok CLI has the same token); run: grok-mcp auth login".into(),
         ));
     }
 
@@ -259,7 +255,9 @@ mod tests {
             r#"HTTP 400 Bad Request: {"error":"invalid_grant","error_description":"Refresh token has been revoked"}"#.into()
         )));
         assert!(is_refresh_revoked(&AuthError::NoRefreshToken));
-        assert!(!is_refresh_revoked(&AuthError::RefreshHttp("timeout".into())));
+        assert!(!is_refresh_revoked(&AuthError::RefreshHttp(
+            "timeout".into()
+        )));
     }
 
     #[test]

@@ -53,7 +53,7 @@ impl ServerHandler for GrokMcpServer {
              Web/news/multi-source → research. Offline Q&A → ask_grok (no live search).\n\
              depth=quick|standard|deep (cost/exploration). result=digest|evidence|both (fidelity).\n\
              Cost: ask_grok low; x_search mid–high (evidence higher); research high.\n\
-             Long calls: timeout_secs then poll job_status. On REAUTH_REQUIRED tell user: grok-mcp auth login."
+             Long calls: timeout_secs then poll job_status (max 10 concurrent jobs; over the cap → retryable RATE_LIMITED). On REAUTH_REQUIRED tell user: grok-mcp auth login."
         ));
         info
     }
@@ -76,13 +76,22 @@ mod tests {
         let desc = info.server_info.description.as_deref().unwrap_or("");
         let instructions = info.instructions.as_deref().unwrap_or("");
 
-        assert!(desc.contains("evidence") || desc.contains("x.com"), "desc={desc}");
-        assert!(instructions.contains("result=evidence"), "instr={instructions}");
+        assert!(
+            desc.contains("evidence") || desc.contains("x.com"),
+            "desc={desc}"
+        );
+        assert!(
+            instructions.contains("result=evidence"),
+            "instr={instructions}"
+        );
         assert!(
             instructions.contains("cannot open x.com") || instructions.contains("x.com"),
             "instr={instructions}"
         );
-        assert!(!instructions.contains("verbosity"), "verbosity removed: {instructions}");
+        assert!(
+            !instructions.contains("verbosity"),
+            "verbosity removed: {instructions}"
+        );
         assert!(
             instructions.contains("REAUTH_REQUIRED") && instructions.contains("auth login"),
             "instr={instructions}"
