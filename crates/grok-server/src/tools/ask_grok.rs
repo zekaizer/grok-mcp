@@ -64,7 +64,7 @@ pub struct AskGrokOk {
 #[tool_router(router = ask_grok_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Low-cost single-shot offload to Grok: Q&A, critique, analysis — no web/X search. Prefer over research when live sources are not needed. For X posts use x_search; for current news use research. depth=quick|standard|deep. Optional timeout_secs → job_status (async jobs capped at 10 concurrent; over the cap returns retryable RATE_LIMITED).",
+        description = "Low-cost single-shot offload to Grok: Q&A, critique, analysis — no web/X search. Prefer over research when live sources are not needed. For X posts use x_search; for current news use research. depth=quick|standard|deep. Async by default: returns inline if done within ~25s, else status=running + job_id → poll job_status (timeout_secs 1-300 overrides the window). Up to 10 run concurrently plus 20 queued; RATE_LIMITED (retryable) only when the queue is full.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -117,11 +117,12 @@ impl GrokMcpServer {
             RunOutcome::Running {
                 job_id,
                 elapsed_secs,
+                status,
             } => AskGrokOk {
                 ok: true,
-                status: "running".into(),
+                status: status.clone(),
                 job_id: Some(job_id.clone()),
-                next: Some(next_poll_hint(&job_id)),
+                next: Some(next_poll_hint(&job_id, &status)),
                 elapsed_secs: Some(elapsed_secs),
                 text: None,
                 model: None,

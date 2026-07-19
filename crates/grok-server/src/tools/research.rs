@@ -93,7 +93,7 @@ pub struct CitationItem {
 #[tool_router(router = research_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Multi-step live research (current web/news; optional X) via xAI Grok. Expensive (high SuperGrok quota). For X posts/tweets/x.com-only work use x_search instead. result=digest|evidence|both (evidence fills citation quotes; host fetch not assumed). depth=quick|standard|deep. No live sources needed → ask_grok. Optional timeout_secs → job_status (async jobs capped at 10 concurrent; over the cap returns retryable RATE_LIMITED).",
+        description = "Multi-step live research (current web/news; optional X) via xAI Grok. Expensive (high SuperGrok quota). For X posts/tweets/x.com-only work use x_search instead. result=digest|evidence|both (evidence fills citation quotes; host fetch not assumed). depth=quick|standard|deep. No live sources needed → ask_grok. Async by default: returns inline if done within ~25s, else status=running + job_id → poll job_status (timeout_secs 1-300 overrides the window). Up to 10 run concurrently plus 20 queued; RATE_LIMITED (retryable) only when the queue is full.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -136,11 +136,12 @@ impl GrokMcpServer {
             RunOutcome::Running {
                 job_id,
                 elapsed_secs,
+                status,
             } => ResearchOk {
                 ok: true,
-                status: "running".into(),
+                status: status.clone(),
                 job_id: Some(job_id.clone()),
-                next: Some(next_poll_hint(&job_id)),
+                next: Some(next_poll_hint(&job_id, &status)),
                 elapsed_secs: Some(elapsed_secs),
                 result_mode: None,
                 answer: None,

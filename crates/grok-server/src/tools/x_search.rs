@@ -36,8 +36,9 @@ pub struct XSearchArgs {
     pub max_items: Option<u32>,
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
-    /// If set (1–300), wait at most N seconds then return status=running + job_id for job_status.
-    /// Async jobs are capped at 10 concurrent; over the cap returns retryable RATE_LIMITED.
+    /// Offload window override (1–300s). Omitted uses the default (~25s). Within the window
+    /// the result returns inline; past it the tool returns status=running + job_id for job_status.
+    /// Up to 10 jobs run concurrently plus 20 queued; a full queue returns retryable RATE_LIMITED.
     #[serde(default)]
     pub timeout_secs: Option<u32>,
     #[serde(default)]
@@ -113,7 +114,7 @@ pub struct PostItem {
 #[tool_router(router = x_search_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Search X (Twitter / x.com) posts. NOT a bit-perfect X API export: post text is best-effort via Grok (may paraphrase); do not use for legal/audit verbatim. ALWAYS use for X posts/tweets/discourse — hosts usually cannot fetch x.com. result=digest (default)=summary+excerpts; result=evidence=best-effort full post text (empty matches return ok with evidence_status=empty, not an error); result=both=digest+posts. depth=quick|standard|deep. Prefer over research for X-only. Optional timeout_secs → job_status (async jobs capped at 10 concurrent; over the cap returns retryable RATE_LIMITED).",
+        description = "Search X (Twitter / x.com) posts. NOT a bit-perfect X API export: post text is best-effort via Grok (may paraphrase); do not use for legal/audit verbatim. ALWAYS use for X posts/tweets/discourse — hosts usually cannot fetch x.com. result=digest (default)=summary+excerpts; result=evidence=best-effort full post text (empty matches return ok with evidence_status=empty, not an error); result=both=digest+posts. depth=quick|standard|deep. Prefer over research for X-only. Async by default: returns inline if done within ~25s, else status=running + job_id → poll job_status (timeout_secs 1-300 overrides the window). Up to 10 run concurrently plus 20 queued; RATE_LIMITED (retryable) only when the queue is full.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -156,11 +157,12 @@ impl GrokMcpServer {
             RunOutcome::Running {
                 job_id,
                 elapsed_secs,
+                status,
             } => XSearchOk {
                 ok: true,
-                status: "running".into(),
+                status: status.clone(),
                 job_id: Some(job_id.clone()),
-                next: Some(next_poll_hint(&job_id)),
+                next: Some(next_poll_hint(&job_id, &status)),
                 elapsed_secs: Some(elapsed_secs),
                 result_mode: None,
                 digest: None,

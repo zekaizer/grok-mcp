@@ -124,8 +124,10 @@ Shared by generative tools where noted.
 
 ### Async (`timeout_secs`)
 
-Same as v1: omit = wait; set N → may return `status=running` + `job_id`; poll `job_status`.
-In-memory jobs; max 10 concurrent (over the cap → retryable `RATE_LIMITED`); ~30m TTL after finish.
+Async by default: omit `timeout_secs` = offload after the default window (~25s); set N (1–300) to override.
+Finishes within the window → inline result; past it → `status=running` (or `queued` while waiting for a slot) + `job_id`; poll `job_status`.
+In-memory jobs; up to 10 run concurrently plus 20 queued (full queue → retryable `RATE_LIMITED`); ~30m TTL after finish.
+A queued job with no `job_status` poll for ~5 min is dropped when it reaches a slot (status `failed`, code `ABANDONED`) — keep polling to keep it alive.
 
 ---
 
