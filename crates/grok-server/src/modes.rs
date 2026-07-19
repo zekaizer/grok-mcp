@@ -33,7 +33,10 @@ impl ResultMode {
 
 /// Parse `result` query param. Default `digest`.
 pub fn parse_result_mode(raw: Option<&str>) -> Result<ResultMode, Fail> {
-    let s = raw.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("digest");
+    let s = raw
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("digest");
     match s.to_ascii_lowercase().as_str() {
         "digest" => Ok(ResultMode::Digest),
         "evidence" => Ok(ResultMode::Evidence),
@@ -113,7 +116,10 @@ pub fn evidence_status_for_posts(posts: &[(bool, bool)]) -> &'static str {
 
 /// Same for research citations with optional quotes.
 #[must_use]
-pub fn evidence_status_for_quotes(quotes: &[Option<&str>], quote_complete: &[bool]) -> &'static str {
+pub fn evidence_status_for_quotes(
+    quotes: &[Option<&str>],
+    quote_complete: &[bool],
+) -> &'static str {
     debug_assert_eq!(quotes.len(), quote_complete.len());
     let pairs: Vec<(bool, bool)> = quotes
         .iter()
@@ -160,7 +166,10 @@ mod tests {
     #[test]
     fn result_defaults_and_parses() {
         assert_eq!(parse_result_mode(None).unwrap(), ResultMode::Digest);
-        assert_eq!(parse_result_mode(Some("EVIDENCE")).unwrap(), ResultMode::Evidence);
+        assert_eq!(
+            parse_result_mode(Some("EVIDENCE")).unwrap(),
+            ResultMode::Evidence
+        );
         assert!(parse_result_mode(Some("raw")).is_err());
     }
 

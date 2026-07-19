@@ -32,7 +32,10 @@ async fn live_e2e_eval() {
         .await
         .expect("auth_status");
     let auth = auth.0;
-    eprintln!("\n=== auth_status ===\n{}", serde_json::to_string_pretty(&auth).unwrap());
+    eprintln!(
+        "\n=== auth_status ===\n{}",
+        serde_json::to_string_pretty(&auth).unwrap()
+    );
     assert!(auth.ok);
     assert!(
         auth.authenticated,
@@ -85,7 +88,10 @@ async fn live_e2e_eval() {
     assert_eq!(dig.status, "completed");
     assert_eq!(dig.result_mode.as_deref(), Some("digest"));
     assert!(dig.digest.is_some(), "digest mode must return digest");
-    assert!(dig.evidence_status.is_none(), "digest mode: no evidence_status");
+    assert!(
+        dig.evidence_status.is_none(),
+        "digest mode: no evidence_status"
+    );
     assert!(dig.fidelity.is_none(), "digest mode: no fidelity block");
 
     // --- x_search evidence (full text path) ---
@@ -119,7 +125,10 @@ async fn live_e2e_eval() {
         matches!(est, "empty" | "partial" | "complete"),
         "unexpected evidence_status={est}"
     );
-    assert!(ev.fidelity.is_some(), "fidelity block required for evidence");
+    assert!(
+        ev.fidelity.is_some(),
+        "fidelity block required for evidence"
+    );
     assert!(
         ev.fidelity
             .as_ref()
@@ -161,8 +170,9 @@ async fn live_e2e_eval() {
     // --- x_search impossible query → empty success ---
     let none = s
         .x_search(Parameters(XSearchArgs {
-            query: "from:this_handle_should_not_exist_zzzxxyy_98765 since:2099-01-01 until:2099-01-02"
-                .into(),
+            query:
+                "from:this_handle_should_not_exist_zzzxxyy_98765 since:2099-01-01 until:2099-01-02"
+                    .into(),
             result: Some("evidence".into()),
             depth: Some("quick".into()),
             model: None,
@@ -180,7 +190,11 @@ async fn live_e2e_eval() {
     );
     assert!(none.ok);
     assert_eq!(none.evidence_status.as_deref(), Some("empty"));
-    assert!(none.posts.as_ref().is_some_and(|p| p.is_empty()) || none.posts.is_none() || none.posts.as_ref().unwrap().is_empty());
+    assert!(
+        none.posts.as_ref().is_some_and(|p| p.is_empty())
+            || none.posts.is_none()
+            || none.posts.as_ref().unwrap().is_empty()
+    );
     assert!(
         none.digest
             .as_ref()

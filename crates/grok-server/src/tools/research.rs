@@ -231,10 +231,7 @@ impl GrokMcpServer {
         };
 
         let evidence_status = if mode.wants_evidence() {
-            let quotes: Vec<Option<&str>> = citations
-                .iter()
-                .map(|c| c.quote.as_deref())
-                .collect();
+            let quotes: Vec<Option<&str>> = citations.iter().map(|c| c.quote.as_deref()).collect();
             let completes: Vec<bool> = citations.iter().map(|c| c.quote_complete).collect();
             Some(evidence_status_for_quotes(&quotes, &completes).to_string())
         } else {
@@ -352,9 +349,5 @@ fn native_tools(sources: Option<Vec<String>>) -> Option<Vec<Value>> {
             _ => {}
         }
     }
-    if tools.is_empty() {
-        None
-    } else {
-        Some(tools)
-    }
+    if tools.is_empty() { None } else { Some(tools) }
 }

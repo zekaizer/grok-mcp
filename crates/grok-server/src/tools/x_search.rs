@@ -449,7 +449,13 @@ mod tests {
             d.starts_with("Search X") || d.contains("NOT a bit-perfect"),
             "desc={d}"
         );
-        assert!(d.contains("NOT a bit-perfect") || d.contains("best-effort"), "desc={d}");
-        assert!(d.contains("evidence_status=empty") || d.contains("empty"), "desc={d}");
+        assert!(
+            d.contains("NOT a bit-perfect") || d.contains("best-effort"),
+            "desc={d}"
+        );
+        assert!(
+            d.contains("evidence_status=empty") || d.contains("empty"),
+            "desc={d}"
+        );
     }
 }

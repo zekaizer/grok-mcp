@@ -76,13 +76,22 @@ mod tests {
         let desc = info.server_info.description.as_deref().unwrap_or("");
         let instructions = info.instructions.as_deref().unwrap_or("");
 
-        assert!(desc.contains("evidence") || desc.contains("x.com"), "desc={desc}");
-        assert!(instructions.contains("result=evidence"), "instr={instructions}");
+        assert!(
+            desc.contains("evidence") || desc.contains("x.com"),
+            "desc={desc}"
+        );
+        assert!(
+            instructions.contains("result=evidence"),
+            "instr={instructions}"
+        );
         assert!(
             instructions.contains("cannot open x.com") || instructions.contains("x.com"),
             "instr={instructions}"
         );
-        assert!(!instructions.contains("verbosity"), "verbosity removed: {instructions}");
+        assert!(
+            !instructions.contains("verbosity"),
+            "verbosity removed: {instructions}"
+        );
         assert!(
             instructions.contains("REAUTH_REQUIRED") && instructions.contains("auth login"),
             "instr={instructions}"
