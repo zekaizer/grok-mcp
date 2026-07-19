@@ -32,6 +32,11 @@ pub const TIMEOUT_SECS_MAX: u32 = 300;
 /// than blocking until the client gives up.
 pub const DEFAULT_TIMEOUT_SECS: u32 = 25;
 
+/// A queued job whose client has not polled within this window is dropped when it
+/// reaches a free slot, instead of spending quota on a result nobody will read.
+/// Well above the offload window plus a healthy poll gap, so live clients are safe.
+pub const IDLE_DROP: Duration = Duration::from_secs(5 * 60);
+
 static JOB_SEQ: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +74,9 @@ struct JobEntry {
     kind: JobKind,
     created: Instant,
     finished: Option<Instant>,
+    /// Last time a client polled this job (starts at creation). Used to drop
+    /// queued jobs no one is waiting for before they spend SuperGrok quota.
+    last_poll: Instant,
     state: JobState,
 }
 
@@ -126,26 +134,42 @@ impl JobStore {
                 true,
             ));
         }
+        let now = Instant::now();
         let id = format!("job_{}", JOB_SEQ.fetch_add(1, Ordering::Relaxed));
         map.insert(
             id.clone(),
             JobEntry {
                 kind,
-                created: Instant::now(),
+                created: now,
                 finished: None,
+                last_poll: now,
                 state: JobState::Queued,
             },
         );
         Ok(id)
     }
 
-    /// Transition a queued job to running once it holds a permit.
-    pub fn mark_running(&self, id: &str) {
+    /// Claim a queued job for execution once it holds a permit, or drop it as
+    /// abandoned if no client has polled within `idle`. Returns `true` if the job
+    /// is now Running and should proceed, `false` if it was dropped (or is gone).
+    pub fn claim_or_abandon(&self, id: &str, idle: Duration) -> bool {
         let mut map = self.inner.lock().expect("job store lock");
-        if let Some(e) = map.get_mut(id)
-            && matches!(e.state, JobState::Queued)
-        {
-            e.state = JobState::Running;
+        match map.get_mut(id) {
+            Some(e) if matches!(e.state, JobState::Queued) => {
+                if e.last_poll.elapsed() > idle {
+                    e.state = JobState::Failed {
+                        code: "ABANDONED".to_string(),
+                        message: "job dropped: no client polled before it reached a free slot"
+                            .to_string(),
+                    };
+                    e.finished = Some(Instant::now());
+                    false
+                } else {
+                    e.state = JobState::Running;
+                    true
+                }
+            }
+            _ => false,
         }
     }
 
@@ -174,11 +198,8 @@ impl JobStore {
         }
     }
 
-    pub fn get(&self, id: &str) -> Option<JobSnapshot> {
-        let mut map = self.inner.lock().expect("job store lock");
-        Self::purge_locked(&mut map);
-        let e = map.get(id)?;
-        Some(JobSnapshot {
+    fn snapshot(id: &str, e: &JobEntry) -> JobSnapshot {
+        JobSnapshot {
             job_id: id.to_string(),
             kind: e.kind,
             status: match &e.state {
@@ -201,7 +222,24 @@ impl JobStore {
                 JobState::Failed { message, .. } => Some(message.clone()),
                 _ => None,
             },
-        })
+        }
+    }
+
+    /// Read a job's state without recording client interest (internal use).
+    pub fn get(&self, id: &str) -> Option<JobSnapshot> {
+        let mut map = self.inner.lock().expect("job store lock");
+        Self::purge_locked(&mut map);
+        map.get(id).map(|e| Self::snapshot(id, e))
+    }
+
+    /// Read a job's state on behalf of a client poll, marking it as still wanted
+    /// so an unfinished job is not dropped as abandoned.
+    pub fn poll(&self, id: &str) -> Option<JobSnapshot> {
+        let mut map = self.inner.lock().expect("job store lock");
+        Self::purge_locked(&mut map);
+        let e = map.get_mut(id)?;
+        e.last_poll = Instant::now();
+        Some(Self::snapshot(id, e))
     }
 }
 
@@ -278,7 +316,10 @@ where
                     return;
                 }
             };
-            store_bg.mark_running(&jid);
+            // No client waiting for the result? Drop it instead of spending quota.
+            if !store_bg.claim_or_abandon(&jid, IDLE_DROP) {
+                return;
+            }
             match work().await {
                 Ok(val) => match serde_json::to_value(&val) {
                     Ok(json) => store_bg.complete_json(&jid, json),
@@ -384,6 +425,29 @@ mod tests {
             RunOutcome::Completed(d) => assert_eq!(d.n, 1),
             RunOutcome::Running { .. } => panic!("expected completed"),
         }
+    }
+
+    #[test]
+    fn unpolled_queued_job_is_abandoned_at_slot() {
+        let store = JobStore::new();
+        let id = store.admit(JobKind::XSearch).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        // No poll happened, so past the idle window the job is dropped, not run.
+        assert!(!store.claim_or_abandon(&id, Duration::from_millis(5)));
+        let snap = store.get(&id).unwrap();
+        assert_eq!(snap.status, "failed");
+        assert_eq!(snap.error_code.as_deref(), Some("ABANDONED"));
+    }
+
+    #[test]
+    fn polled_queued_job_is_claimed_at_slot() {
+        let store = JobStore::new();
+        let id = store.admit(JobKind::XSearch).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        // A recent poll marks the job as still wanted, so it is claimed to run.
+        assert!(store.poll(&id).is_some());
+        assert!(store.claim_or_abandon(&id, Duration::from_millis(5)));
+        assert_eq!(store.get(&id).unwrap().status, "running");
     }
 
     #[test]

@@ -42,7 +42,7 @@ pub struct JobStatusOk {
 #[tool_router(router = job_status_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Poll a background job started when research / ask_grok / x_search returned status=running. Pass job_id until status is completed (result filled) or failed; status may also be queued (admitted, waiting for a concurrency slot). Jobs are in-memory and lost on server restart; finished jobs expire after ~30 minutes. Up to 10 jobs run concurrently plus 20 queued; a full queue returns retryable RATE_LIMITED.",
+        description = "Poll a background job started when research / ask_grok / x_search returned status=running. Pass job_id until status is completed (result filled) or failed; status may also be queued (admitted, waiting for a concurrency slot). Jobs are in-memory and lost on server restart; finished jobs expire after ~30 minutes. Up to 10 jobs run concurrently plus 20 queued; a full queue returns retryable RATE_LIMITED. Keep polling: a queued job with no poll for ~5 minutes is dropped when it reaches a slot (status failed, code ABANDONED) so it does not burn quota on a result nobody will read.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -61,7 +61,7 @@ impl GrokMcpServer {
             );
         }
 
-        match self.jobs.get(&job_id) {
+        match self.jobs.poll(&job_id) {
             None => Ok(Json(JobStatusOk {
                 ok: true,
                 status: "not_found".into(),
