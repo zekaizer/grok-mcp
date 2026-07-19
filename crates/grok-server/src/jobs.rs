@@ -27,6 +27,11 @@ pub const JOB_TTL: Duration = Duration::from_secs(30 * 60);
 pub const TIMEOUT_SECS_MIN: u32 = 1;
 pub const TIMEOUT_SECS_MAX: u32 = 300;
 
+/// Default offload window when `timeout_secs` is omitted. Kept comfortably under
+/// typical MCP client request timeouts (~60s) so calls offload to a job rather
+/// than blocking until the client gives up.
+pub const DEFAULT_TIMEOUT_SECS: u32 = 25;
+
 static JOB_SEQ: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,20 +223,29 @@ pub enum RunOutcome<T> {
     Running { job_id: String, elapsed_secs: u64 },
 }
 
-/// Validate and clamp optional timeout.
+/// Validate and clamp an explicit timeout, if any. `None` stays `None` here;
+/// [`effective_timeout_secs`] applies the default.
 pub fn parse_timeout_secs(raw: Option<u32>) -> Result<Option<u32>, Fail> {
     match raw {
         None => Ok(None),
         Some(0) => Err(Fail::new(
             ErrorCode::InvalidParams,
-            "timeout_secs must be >= 1 when set (omit for fully synchronous wait)",
+            "timeout_secs must be >= 1 when set (omit to use the default offload window)",
             false,
         )),
         Some(n) => Ok(Some(n.clamp(TIMEOUT_SECS_MIN, TIMEOUT_SECS_MAX))),
     }
 }
 
-/// Run `work` to completion, or return `Running` after `timeout_secs` while work continues.
+/// Resolve the offload window actually used: an explicit (validated, clamped)
+/// `timeout_secs`, or [`DEFAULT_TIMEOUT_SECS`] when omitted. Async is the default —
+/// work still returns inline via `Completed` when it finishes within the window.
+pub fn effective_timeout_secs(raw: Option<u32>) -> Result<u32, Fail> {
+    Ok(parse_timeout_secs(raw)?.unwrap_or(DEFAULT_TIMEOUT_SECS))
+}
+
+/// Run `work` to completion inline, or return `Running` after the offload window
+/// (explicit `timeout_secs`, else [`DEFAULT_TIMEOUT_SECS`]) while work continues as a job.
 pub async fn run_with_timeout<T, F, Fut>(
     store: &JobStore,
     kind: JobKind,
@@ -243,89 +257,83 @@ where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = Result<T, Fail>> + Send + 'static,
 {
-    let timeout_secs = parse_timeout_secs(timeout_secs)?;
+    let secs = effective_timeout_secs(timeout_secs)?;
 
-    match timeout_secs {
-        None => {
-            let result = work().await?;
-            Ok(RunOutcome::Completed(result))
-        }
-        Some(secs) => {
-            let job_id = store.admit(kind)?;
-            let store_bg = store.clone();
-            let jid = job_id.clone();
-            let sem = store.semaphore();
-            let handle = tokio::spawn(async move {
-                // Wait for an inflight slot — this await is the queue.
-                let _permit = match sem.acquire_owned().await {
-                    Ok(p) => p,
-                    Err(_) => {
-                        store_bg.fail(&jid, "UPSTREAM_ERROR", "job scheduler shut down");
-                        return;
-                    }
-                };
-                store_bg.mark_running(&jid);
-                match work().await {
-                    Ok(val) => match serde_json::to_value(&val) {
-                        Ok(json) => store_bg.complete_json(&jid, json),
-                        Err(e) => store_bg.fail(&jid, "UPSTREAM_ERROR", e.to_string()),
-                    },
-                    Err(fail) => store_bg.fail(&jid, fail.error.code.as_str(), fail.error.message),
+    {
+        let job_id = store.admit(kind)?;
+        let store_bg = store.clone();
+        let jid = job_id.clone();
+        let sem = store.semaphore();
+        let handle = tokio::spawn(async move {
+            // Wait for an inflight slot — this await is the queue.
+            let _permit = match sem.acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => {
+                    store_bg.fail(&jid, "UPSTREAM_ERROR", "job scheduler shut down");
+                    return;
                 }
-                // Permit dropped here — the next queued job proceeds.
-            });
+            };
+            store_bg.mark_running(&jid);
+            match work().await {
+                Ok(val) => match serde_json::to_value(&val) {
+                    Ok(json) => store_bg.complete_json(&jid, json),
+                    Err(e) => store_bg.fail(&jid, "UPSTREAM_ERROR", e.to_string()),
+                },
+                Err(fail) => store_bg.fail(&jid, fail.error.code.as_str(), fail.error.message),
+            }
+            // Permit dropped here — the next queued job proceeds.
+        });
 
-            let sleep = tokio::time::sleep(Duration::from_secs(u64::from(secs)));
-            tokio::pin!(sleep);
+        let sleep = tokio::time::sleep(Duration::from_secs(u64::from(secs)));
+        tokio::pin!(sleep);
 
-            tokio::select! {
-                biased;
-                join = handle => {
-                    match join {
-                        Ok(()) => {
-                            // Finished within timeout — read result from store.
-                            match store.get(&job_id) {
-                                Some(snap) if snap.status == "completed" => {
-                                    let val: T = serde_json::from_value(
-                                        snap.result.unwrap_or(Value::Null),
+        tokio::select! {
+            biased;
+            join = handle => {
+                match join {
+                    Ok(()) => {
+                        // Finished within timeout — read result from store.
+                        match store.get(&job_id) {
+                            Some(snap) if snap.status == "completed" => {
+                                let val: T = serde_json::from_value(
+                                    snap.result.unwrap_or(Value::Null),
+                                )
+                                .map_err(|e| {
+                                    Fail::new(
+                                        ErrorCode::UpstreamError,
+                                        format!("job result decode: {e}"),
+                                        false,
                                     )
-                                    .map_err(|e| {
-                                        Fail::new(
-                                            ErrorCode::UpstreamError,
-                                            format!("job result decode: {e}"),
-                                            false,
-                                        )
-                                    })?;
-                                    Ok(RunOutcome::Completed(val))
-                                }
-                                Some(snap) if snap.status == "failed" => Err(Fail::new(
-                                    ErrorCode::UpstreamError,
-                                    snap.error_message.unwrap_or_else(|| "job failed".into()),
-                                    false,
-                                )),
-                                _ => Err(Fail::new(
-                                    ErrorCode::UpstreamError,
-                                    "job finished in unknown state",
-                                    false,
-                                )),
+                                })?;
+                                Ok(RunOutcome::Completed(val))
                             }
-                        }
-                        Err(e) => {
-                            store.fail(&job_id, "UPSTREAM_ERROR", format!("task join: {e}"));
-                            Err(Fail::new(
+                            Some(snap) if snap.status == "failed" => Err(Fail::new(
                                 ErrorCode::UpstreamError,
-                                format!("background task failed: {e}"),
+                                snap.error_message.unwrap_or_else(|| "job failed".into()),
                                 false,
-                            ))
+                            )),
+                            _ => Err(Fail::new(
+                                ErrorCode::UpstreamError,
+                                "job finished in unknown state",
+                                false,
+                            )),
                         }
                     }
+                    Err(e) => {
+                        store.fail(&job_id, "UPSTREAM_ERROR", format!("task join: {e}"));
+                        Err(Fail::new(
+                            ErrorCode::UpstreamError,
+                            format!("background task failed: {e}"),
+                            false,
+                        ))
+                    }
                 }
-                () = &mut sleep => {
-                    Ok(RunOutcome::Running {
-                        job_id,
-                        elapsed_secs: u64::from(secs),
-                    })
-                }
+            }
+            () = &mut sleep => {
+                Ok(RunOutcome::Running {
+                    job_id,
+                    elapsed_secs: u64::from(secs),
+                })
             }
         }
     }
@@ -348,7 +356,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_path_no_timeout() {
+    async fn fast_work_completes_inline_without_timeout_arg() {
+        // Async is the default (None → DEFAULT_TIMEOUT_SECS), but work that
+        // finishes within the window still returns inline as Completed.
         let store = JobStore::new();
         let out = run_with_timeout(&store, JobKind::AskGrok, None, || async {
             Ok::<_, Fail>(Dummy { n: 1 })
@@ -359,6 +369,21 @@ mod tests {
             RunOutcome::Completed(d) => assert_eq!(d.n, 1),
             RunOutcome::Running { .. } => panic!("expected completed"),
         }
+    }
+
+    #[test]
+    fn effective_timeout_defaults_when_absent() {
+        assert_eq!(effective_timeout_secs(None).unwrap(), DEFAULT_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn effective_timeout_uses_and_clamps_explicit() {
+        assert_eq!(effective_timeout_secs(Some(5)).unwrap(), 5);
+        assert_eq!(
+            effective_timeout_secs(Some(9999)).unwrap(),
+            TIMEOUT_SECS_MAX
+        );
+        assert!(effective_timeout_secs(Some(0)).is_err());
     }
 
     #[tokio::test]
