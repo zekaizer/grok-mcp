@@ -53,7 +53,7 @@ impl ServerHandler for GrokMcpServer {
              Web/news/multi-source → research. Offline Q&A → ask_grok (no live search).\n\
              depth=quick|standard|deep (cost/exploration). result=digest|evidence|both (fidelity).\n\
              Cost: ask_grok low; x_search mid–high (evidence higher); research high.\n\
-             Long calls: timeout_secs then poll job_status (max 10 concurrent jobs; over the cap → retryable RATE_LIMITED). On REAUTH_REQUIRED tell user: grok-mcp auth login."
+             Calls run async by default: inline if done within ~25s, else status=running|queued + job_id → poll job_status (timeout_secs overrides the window). 10 run concurrently plus 20 queued; RATE_LIMITED (retryable) only when the queue is full. On REAUTH_REQUIRED tell user: grok-mcp auth login."
         ));
         info
     }

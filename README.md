@@ -32,10 +32,12 @@ Shared options (v2): `depth` (`quick` \| `standard` \| `deep`),
 `result` (`digest` \| `evidence` \| `both`) on live tools,
 `max_output_tokens`, optional **`timeout_secs` (1–300)**, `debug`.
 
-If `timeout_secs` elapses before the call finishes, the tool returns
-`status: "running"` + `job_id` — poll **`job_status`** until `completed` or
-`failed`. Jobs are in-memory (lost on restart); max 10 concurrent
-(over the cap returns retryable `RATE_LIMITED`).
+Calls run **async by default**: if the work finishes within the offload
+window (`timeout_secs`, default ~25s) the result returns inline, otherwise
+the tool returns `status: "running"` (or `"queued"` while waiting for a
+slot) + `job_id` — poll **`job_status`** until `completed` or `failed`.
+Jobs are in-memory (lost on restart); up to 10 run concurrently plus 20
+queued, and only a full queue returns retryable `RATE_LIMITED`.
 
 ## Requirements
 
