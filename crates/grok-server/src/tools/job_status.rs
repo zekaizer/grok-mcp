@@ -42,7 +42,7 @@ pub struct JobStatusOk {
 #[tool_router(router = job_status_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Poll a background job started when research / ask_grok / x_search returned status=running (timeout_secs). Pass job_id until status is completed (result filled) or failed. Jobs are in-memory and lost on server restart; finished jobs expire after ~30 minutes.",
+        description = "Poll a background job started when research / ask_grok / x_search returned status=running (timeout_secs). Pass job_id until status is completed (result filled) or failed. Jobs are in-memory and lost on server restart; finished jobs expire after ~30 minutes. At most 10 jobs run concurrently; starting more returns retryable RATE_LIMITED.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

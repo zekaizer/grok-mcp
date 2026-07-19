@@ -93,7 +93,7 @@ pub struct CitationItem {
 #[tool_router(router = research_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Multi-step live research (current web/news; optional X) via xAI Grok. Expensive (high SuperGrok quota). For X posts/tweets/x.com-only work use x_search instead. result=digest|evidence|both (evidence fills citation quotes; host fetch not assumed). depth=quick|standard|deep. No live sources needed → ask_grok. Optional timeout_secs → job_status.",
+        description = "Multi-step live research (current web/news; optional X) via xAI Grok. Expensive (high SuperGrok quota). For X posts/tweets/x.com-only work use x_search instead. result=digest|evidence|both (evidence fills citation quotes; host fetch not assumed). depth=quick|standard|deep. No live sources needed → ask_grok. Optional timeout_secs → job_status (async jobs capped at 10 concurrent; over the cap returns retryable RATE_LIMITED).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

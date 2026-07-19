@@ -64,7 +64,7 @@ pub struct AskGrokOk {
 #[tool_router(router = ask_grok_router, vis = "pub(crate)")]
 impl GrokMcpServer {
     #[tool(
-        description = "Low-cost single-shot offload to Grok: Q&A, critique, analysis — no web/X search. Prefer over research when live sources are not needed. For X posts use x_search; for current news use research. depth=quick|standard|deep. Optional timeout_secs → job_status.",
+        description = "Low-cost single-shot offload to Grok: Q&A, critique, analysis — no web/X search. Prefer over research when live sources are not needed. For X posts use x_search; for current news use research. depth=quick|standard|deep. Optional timeout_secs → job_status (async jobs capped at 10 concurrent; over the cap returns retryable RATE_LIMITED).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
