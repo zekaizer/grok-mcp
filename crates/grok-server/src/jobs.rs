@@ -220,7 +220,12 @@ pub struct JobSnapshot {
 #[derive(Debug)]
 pub enum RunOutcome<T> {
     Completed(T),
-    Running { job_id: String, elapsed_secs: u64 },
+    Running {
+        job_id: String,
+        elapsed_secs: u64,
+        /// Job state at hand-off: `"running"` (executing) or `"queued"` (waiting for a slot).
+        status: String,
+    },
 }
 
 /// Validate and clamp an explicit timeout, if any. `None` stays `None` here;
@@ -330,19 +335,29 @@ where
                 }
             }
             () = &mut sleep => {
+                // Report whether the job is actually executing or still queued.
+                let status = store
+                    .get(&job_id)
+                    .map_or_else(|| "running".to_string(), |s| s.status);
                 Ok(RunOutcome::Running {
                     job_id,
                     elapsed_secs: u64::from(secs),
+                    status,
                 })
             }
         }
     }
 }
 
-/// Hint for hosts after a running response.
+/// Hint for hosts after a deferred response, phrased for the job's current state.
 #[must_use]
-pub fn next_poll_hint(job_id: &str) -> String {
-    format!("call job_status with job_id={job_id} until status is completed or failed")
+pub fn next_poll_hint(job_id: &str, status: &str) -> String {
+    let state = if status == "queued" {
+        "queued, waiting for a free slot"
+    } else {
+        "in progress"
+    };
+    format!("{state}; call job_status with job_id={job_id} until status is completed or failed")
 }
 
 #[cfg(test)]
@@ -369,6 +384,15 @@ mod tests {
             RunOutcome::Completed(d) => assert_eq!(d.n, 1),
             RunOutcome::Running { .. } => panic!("expected completed"),
         }
+    }
+
+    #[test]
+    fn poll_hint_distinguishes_queued_and_running() {
+        let q = next_poll_hint("job_1", "queued");
+        let r = next_poll_hint("job_1", "running");
+        assert!(q.contains("queued"), "hint={q}");
+        assert!(r.contains("in progress"), "hint={r}");
+        assert!(q.contains("job_1") && r.contains("job_1"));
     }
 
     #[test]
@@ -400,8 +424,11 @@ mod tests {
             RunOutcome::Running {
                 job_id,
                 elapsed_secs,
+                status,
             } => {
                 assert_eq!(elapsed_secs, 1);
+                // Executing (permit held), so the hand-off status is running, not queued.
+                assert_eq!(status, "running");
                 job_id
             }
             RunOutcome::Completed(_) => panic!("expected running"),
@@ -477,7 +504,11 @@ mod tests {
         .await
         .unwrap();
         let job_id = match out {
-            RunOutcome::Running { job_id, .. } => job_id,
+            RunOutcome::Running { job_id, status, .. } => {
+                // Hand-off status reflects that it is waiting, not executing.
+                assert_eq!(status, "queued");
+                job_id
+            }
             RunOutcome::Completed(_) => panic!("expected queued/running"),
         };
         assert_eq!(store.get(&job_id).unwrap().status, "queued");

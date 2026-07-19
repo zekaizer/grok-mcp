@@ -76,8 +76,8 @@ impl GrokMcpServer {
                 ),
             })),
             Some(snap) => {
-                let next = if snap.status == "running" {
-                    Some(next_poll_hint(&snap.job_id))
+                let next = if snap.status == "running" || snap.status == "queued" {
+                    Some(next_poll_hint(&snap.job_id, &snap.status))
                 } else {
                     None
                 };

@@ -136,11 +136,12 @@ impl GrokMcpServer {
             RunOutcome::Running {
                 job_id,
                 elapsed_secs,
+                status,
             } => ResearchOk {
                 ok: true,
-                status: "running".into(),
+                status: status.clone(),
                 job_id: Some(job_id.clone()),
-                next: Some(next_poll_hint(&job_id)),
+                next: Some(next_poll_hint(&job_id, &status)),
                 elapsed_secs: Some(elapsed_secs),
                 result_mode: None,
                 answer: None,
